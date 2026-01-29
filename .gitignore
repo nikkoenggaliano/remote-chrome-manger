@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Local Database & Config
+database.sqlite
+database.sqlite-journal
+*.db
+*.sqlite
+
+# Browser Profiles (Contains sessions/cookies)
+profiles/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+Thumbtack.db
+ehthumbs.db
+desktop.ini
+
+# Environment / Credentials
+.env
+.venv
+env/
+venv/
+
+# Screen / Process files
+*.screen
+
+
+# Text
+
+*.txt
+
+# My Own deploy 
+
+send.sh 
+spawner.sh

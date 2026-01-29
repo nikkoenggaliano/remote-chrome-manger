@@ -1,0 +1,249 @@
+:root {
+    /* Light Mode (Default) */
+    --bg-body: #f8f9fa;
+    --bg-sidebar: #ffffff;
+    --bg-card: #ffffff;
+    --bg-hover: #e9ecef;
+    --text-main: #212529;
+    --text-muted: #6c757d;
+    --border-color: #dee2e6;
+    --sidebar-width: 250px;
+    --accent-color: #0d6efd;
+    --accent-hover: #0b5ed7;
+    --shadow-sm: 0 .125rem .25rem rgba(0,0,0,.075);
+    --shadow-md: 0 .5rem 1rem rgba(0,0,0,.15);
+    --input-bg: #fff;
+    --input-border: #ced4da;
+    --modal-bg: #fff;
+    --terminal-bg: #212529;
+    --terminal-text: #f8f9fa;
+}
+
+[data-theme="dark"] {
+    /* Dark Mode */
+    --bg-body: #212529;
+    --bg-sidebar: #191c1f; /* Darker than body */
+    --bg-card: #2c3034;
+    --bg-hover: #343a40;
+    --text-main: #f8f9fa;
+    --text-muted: #adb5bd;
+    --border-color: #495057;
+    --accent-color: #0d6efd; /* Keep blue or tweak */
+    --input-bg: #212529;
+    --input-border: #495057;
+    --modal-bg: #212529;
+    --terminal-bg: #0d1117;
+    --terminal-text: #c9d1d9;
+    --shadow-sm: 0 .125rem .25rem rgba(0,0,0,.5);
+    --shadow-md: 0 .5rem 1rem rgba(0,0,0,.8);
+}
+
+body {
+    background-color: var(--bg-body);
+    color: var(--text-main);
+    transition: background-color 0.3s ease, color 0.3s ease;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+/* Layout */
+#wrapper {
+    overflow-x: hidden;
+    min-height: 100vh;
+}
+
+#sidebar-wrapper {
+    min-height: 100vh;
+    margin-left: -var(--sidebar-width);
+    transition: margin 0.25s ease-out, background-color 0.3s;
+    width: var(--sidebar-width);
+    background-color: var(--bg-sidebar);
+    border-right: 1px solid var(--border-color);
+}
+
+.sidebar-heading {
+    padding: 1.5rem 1.25rem;
+    font-size: 1.2rem;
+    color: var(--accent-color);
+    border-bottom: 1px solid var(--border-color);
+}
+
+#page-content-wrapper {
+    min-width: 100vw;
+}
+
+@media (min-width: 768px) {
+    #sidebar-wrapper {
+        margin-left: 0;
+    }
+    #page-content-wrapper {
+        min-width: 0;
+        width: 100%;
+    }
+}
+
+/* Navbar */
+.navbar-custom {
+    background-color: var(--bg-sidebar);
+    border-bottom: 1px solid var(--border-color);
+    color: var(--text-main);
+}
+
+.navbar-custom .navbar-brand {
+    color: var(--text-main);
+}
+
+/* Sidebar Links */
+.list-group-item-theme {
+    background-color: transparent;
+    border: none;
+    color: var(--text-muted);
+    padding: 15px 25px;
+    font-weight: 500;
+    transition: all 0.2s;
+}
+
+.list-group-item-theme:hover {
+    background-color: var(--bg-hover);
+    color: var(--text-main);
+}
+
+.list-group-item-theme.active {
+    color: var(--accent-color);
+    background-color: var(--bg-hover);
+    border-right: 4px solid var(--accent-color);
+}
+
+.list-group-item-theme i {
+    font-size: 1.1rem;
+}
+
+/* Cards */
+.card-theme {
+    background-color: var(--bg-card);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    box-shadow: var(--shadow-sm);
+    transition: transform 0.2s, box-shadow 0.2s;
+    border-radius: 12px;
+}
+
+.card-theme:hover {
+    transform: translateY(-5px);
+    box-shadow: var(--shadow-md);
+}
+
+.card-theme .card-header {
+    background-color: transparent;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.card-theme .card-footer {
+    background-color: transparent;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Instance Status */
+.status-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+    margin-right: 5px;
+}
+.status-running { background-color: #28a745; box-shadow: 0 0 5px #28a745; }
+.status-stopped { background-color: #dc3545; }
+.status-partial { background-color: #ffc107; }
+
+/* Tables */
+.table-theme {
+    color: var(--text-main);
+    background-color: var(--bg-card);
+}
+.table-theme thead th {
+    border-bottom: 2px solid var(--border-color);
+    color: var(--text-muted);
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+}
+.table-theme td {
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+.table-theme tbody tr:hover {
+    background-color: var(--bg-hover);
+}
+
+/* Modals */
+.modal-content-theme {
+    background-color: var(--modal-bg);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+}
+.modal-header-theme {
+    border-bottom: 1px solid var(--border-color);
+}
+.modal-footer-theme {
+    border-top: 1px solid var(--border-color);
+}
+
+/* Forms */
+.form-control-theme, .form-select-theme {
+    background-color: var(--input-bg);
+    border: 1px solid var(--input-border);
+    color: var(--text-main);
+}
+.form-control-theme:focus, .form-select-theme:focus {
+    background-color: var(--input-bg);
+    color: var(--text-main);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 0 0.25rem rgba(13, 110, 253, 0.25);
+}
+
+/* Buttons */
+.btn-theme-secondary {
+    color: var(--text-main);
+    background-color: var(--bg-hover);
+    border: 1px solid var(--border-color);
+}
+.btn-theme-secondary:hover {
+    background-color: var(--border-color);
+    color: var(--text-main);
+}
+
+/* Tabs Sidebar (Control Modal) */
+.tabs-sidebar {
+    background-color: var(--bg-sidebar);
+    border-right: 1px solid var(--border-color);
+}
+.tab-list-item {
+    color: var(--text-main);
+    border-bottom: 1px solid var(--border-color);
+}
+.tab-list-item:hover {
+    background-color: var(--bg-hover);
+}
+.tab-list-item.active {
+    background-color: var(--accent-color);
+    color: #fff;
+}
+
+/* Utils */
+.text-theme-muted { color: var(--text-muted) !important; }
+.border-theme { border-color: var(--border-color) !important; }
+.bg-theme-surface { background-color: var(--bg-card) !important; }
+
+/* Interactive */
+.cursor-pointer { cursor: pointer; }
+
+/* Terminal/Log Box */
+.terminal-box {
+    background-color: var(--terminal-bg);
+    color: var(--terminal-text);
+    font-family: monospace;
+    padding: 15px;
+    border-radius: 6px;
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color);
+}
