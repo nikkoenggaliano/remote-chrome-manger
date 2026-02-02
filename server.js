@@ -127,15 +127,44 @@ function broadcastUpdate() {
 
 // --- Routes ---
 
+function getMemoryStats() {
+    const total = os.totalmem();
+    let free = os.freemem();
+
+    if (os.platform() === 'darwin') {
+        try {
+            // On macOS, os.freemem() is very low because it doesn't include inactive memory.
+            // We use vm_stat to get a better picture.
+            const vmStat = execSync('vm_stat').toString();
+            const pageSizeMatch = vmStat.match(/page size of (\d+) bytes/);
+            const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1]) : 4096;
+
+            const freePagesMatch = vmStat.match(/Pages free:\s+(\d+)/);
+            const inactivePagesMatch = vmStat.match(/Pages inactive:\s+(\d+)/);
+
+            if (freePagesMatch && inactivePagesMatch) {
+                const freePages = parseInt(freePagesMatch[1]);
+                const inactivePages = parseInt(inactivePagesMatch[1]);
+                // Available memory = free + inactive
+                free = (freePages + inactivePages) * pageSize;
+            }
+        } catch (e) {
+            // Fallback to os.freemem()
+        }
+    }
+    return { total, free };
+}
+
 // System Stats & Logs
 app.get('/api/server/stats', (req, res) => {
+    const mem = getMemoryStats();
     res.json({
         platform: os.platform(),
         release: os.release(),
         uptime: os.uptime(),
         loadavg: os.loadavg(),
-        totalmem: os.totalmem(),
-        freemem: os.freemem(),
+        totalmem: mem.total,
+        freemem: mem.free,
         cpus: os.cpus().length,
         cpu_model: os.cpus()[0].model,
         interfaces: getNetworkInterfaces(),

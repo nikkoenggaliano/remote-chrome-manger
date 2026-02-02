@@ -218,14 +218,27 @@ body {
 }
 .tab-list-item {
     color: var(--text-main);
+    background-color: transparent;
+    border: none;
     border-bottom: 1px solid var(--border-color);
+    border-radius: 0 !important;
+    text-align: left;
+    transition: all 0.2s;
 }
 .tab-list-item:hover {
     background-color: var(--bg-hover);
+    color: var(--text-main);
 }
 .tab-list-item.active {
-    background-color: var(--accent-color);
-    color: #fff;
+    background-color: var(--accent-color) !important;
+    color: #fff !important;
+    border-color: var(--accent-color);
+}
+.tab-list-item .text-theme-muted {
+    transition: color 0.2s;
+}
+.tab-list-item.active .text-theme-muted {
+    color: rgba(255,255,255,0.8) !important;
 }
 
 /* Utils */

@@ -123,16 +123,26 @@ if [ "$RUN_IN_SCREEN" == "true" ]; then
         exit 1
     fi
 
-    # Check if already running
-    if screen -list | grep -q "\.$SESSION_NAME"; then
+    # Check if already running - more robust check
+    if screen -ls | grep -q "\.${SESSION_NAME}[[:space:]]"; then
         echo -e "${YELLOW}Session '$SESSION_NAME' is already running.${NC}"
         echo "Attach with: screen -r $SESSION_NAME"
     else
         echo "Starting server in screen session '$SESSION_NAME'..."
-        # We pass env vars explicitly to the screen session
-        screen -dmS "$SESSION_NAME" bash -c "export NIKKO_CHROME_USERNAME='$USERNAME'; export NIKKO_CHROME_PASSWORD='$PASSWORD'; node server.js; exec bash"
-        echo -e "${GREEN}Server started in background!${NC}"
-        echo "Attach command: screen -r $SESSION_NAME"
+        # We pass env vars explicitly and ensure PATH is preserved
+        # On macOS, we use 'bash -l' to ensure login profile is loaded if needed, 
+        # but here we just want to make sure node is found.
+        CURRENT_PATH="$PATH"
+        screen -dmS "$SESSION_NAME" bash -c "export PATH='$CURRENT_PATH'; export NIKKO_CHROME_USERNAME='$USERNAME'; export NIKKO_CHROME_PASSWORD='$PASSWORD'; node server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
+        
+        # Give it a second to start
+        sleep 1
+        if screen -ls | grep -q "\.${SESSION_NAME}[[:space:]]"; then
+            echo -e "${GREEN}Server started in background!${NC}"
+            echo "Attach command: screen -r $SESSION_NAME"
+        else
+            echo -e "${RED}Failed to start screen session. Try running without RUN_IN_SCREEN=true to see errors.${NC}"
+        fi
     fi
 else
     echo "Starting server in foreground..."

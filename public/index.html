@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -340,15 +340,15 @@
                         </div>
                         
                         <!-- Main View -->
-                        <div class="col-md-9 d-flex flex-column h-100 bg-black">
-                            <div id="tabContent" class="d-none h-100 flex-column">
-                                <!-- Address Bar -->
-                                <div class="p-2 border-bottom border-secondary bg-dark d-flex gap-2 align-items-center">
-                                    <input type="text" id="activeTabUrl" class="form-control form-control-sm bg-dark text-light border-secondary font-monospace shadow-none">
-                                    <button class="btn btn-sm btn-primary" id="btnGo">Go</button>
-                                    <div class="vr mx-1 bg-secondary"></div>
-                                    <button class="btn btn-sm btn-danger" id="btnCloseTab"><i class="bi bi-x-lg"></i></button>
-                                </div>
+<div class="col-md-9 d-flex flex-column h-100 bg-black">
+    <div id="tabContent" class="d-none h-100 flex-column">
+        <!-- Address Bar -->
+        <div class="p-2 border-bottom border-theme bg-theme-surface d-flex gap-2 align-items-center">
+            <input type="text" id="activeTabUrl" class="form-control form-control-sm form-control-theme font-monospace shadow-none">
+            <button class="btn btn-sm btn-primary" id="btnGo">Go</button>
+            <div class="vr mx-1 bg-secondary opacity-25"></div>
+            <button class="btn btn-sm btn-danger" id="btnCloseTab"><i class="bi bi-x-lg"></i></button>
+        </div>
                                 
                                 <!-- Screen -->
                                 <div id="screenWrapper" class="flex-grow-1 bg-black d-flex align-items-start justify-content-center overflow-auto position-relative" style="background-color: #000;">
