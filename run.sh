@@ -22,18 +22,25 @@ do
    export "$KEY"="$VALUE"
 done
 
+# Default Port if not set
+if [ -z "$PORT" ]; then
+    PORT=3000
+fi
+
 # Check Auth
 if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
     echo -e "${RED}Error: USERNAME and PASSWORD are required.${NC}"
-    echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [RUN_IN_SCREEN=true]"
+    echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [PORT=3000] [RUN_IN_SCREEN=true]"
     exit 1
 fi
 
 export NIKKO_CHROME_USERNAME="$USERNAME"
 export NIKKO_CHROME_PASSWORD="$PASSWORD"
+export PORT="$PORT"
 
 echo -e "${GREEN}>>> Chrome Fleet Control Launcher <<<${NC}"
 echo "User: $NIKKO_CHROME_USERNAME"
+echo "Port: $PORT"
 
 # --- Dependency Check ---
 MISSING_DEPS=0
@@ -133,7 +140,7 @@ if [ "$RUN_IN_SCREEN" == "true" ]; then
         # On macOS, we use 'bash -l' to ensure login profile is loaded if needed, 
         # but here we just want to make sure node is found.
         CURRENT_PATH="$PATH"
-        screen -dmS "$SESSION_NAME" bash -c "export PATH='$CURRENT_PATH'; export NIKKO_CHROME_USERNAME='$USERNAME'; export NIKKO_CHROME_PASSWORD='$PASSWORD'; node server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
+        screen -dmS "$SESSION_NAME" bash -c "export PATH='$CURRENT_PATH'; export NIKKO_CHROME_USERNAME='$USERNAME'; export NIKKO_CHROME_PASSWORD='$PASSWORD'; export PORT='$PORT'; node server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
         
         # Give it a second to start
         sleep 1

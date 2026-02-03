@@ -105,16 +105,16 @@ npm install
 
 ## Running 
 ```bash
-./run.sh USERNAME=admin PASSWORD=admin 
+./run.sh USERNAME=admin PASSWORD=admin PORT=3000
 ```
 
 or auto in `screen` 
 
 ```bash
-./run.sh USERNAME=admin PASSWORD=admin RUN_IN_SCREEN=true
+./run.sh USERNAME=admin PASSWORD=admin PORT=3000 RUN_IN_SCREEN=true
 ``` 
 
-Then open `http://localhost:3000` in your browser.
+Then open `http://localhost:3000` (or your custom port) in your browser.
 
 
 ## macOS Notes
