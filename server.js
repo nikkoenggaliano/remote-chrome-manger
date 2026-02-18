@@ -269,14 +269,20 @@ app.post('/api/instances/:id/start', async (req, res) => {
     res.json({ success: true });
     broadcastUpdate();
   } catch (err) {
+    console.error(`[API] Failed to start instance id=${req.params.id}:`, err.stack || err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
 app.post('/api/instances/:id/stop', (req, res) => {
-  chromeManager.stopInstance(req.params.id);
-  res.json({ success: true });
-  broadcastUpdate();
+  try {
+    chromeManager.stopInstance(req.params.id);
+    res.json({ success: true });
+    broadcastUpdate();
+  } catch (err) {
+    console.error(`[API] Failed to stop instance id=${req.params.id}:`, err.stack || err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/instances/:id/logs', (req, res) => {
