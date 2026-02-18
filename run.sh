@@ -27,20 +27,32 @@ if [ -z "$PORT" ]; then
     PORT=3000
 fi
 
+# Chrome manager runtime defaults (can be overridden via args)
+if [ -z "$CHROME_MANAGER_FORCE_HEADLESS" ]; then
+    CHROME_MANAGER_FORCE_HEADLESS=1
+fi
+if [ -z "$CHROME_MANAGER_ENABLE_WEBGL" ]; then
+    CHROME_MANAGER_ENABLE_WEBGL=1
+fi
+
 # Check Auth
 if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
     echo -e "${RED}Error: USERNAME and PASSWORD are required.${NC}"
-    echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [PORT=3000] [RUN_IN_SCREEN=true]"
+    echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [PORT=3000] [RUN_IN_SCREEN=true] [CHROME_MANAGER_FORCE_HEADLESS=1] [CHROME_MANAGER_ENABLE_WEBGL=1]"
     exit 1
 fi
 
 export NIKKO_CHROME_USERNAME="$USERNAME"
 export NIKKO_CHROME_PASSWORD="$PASSWORD"
 export PORT="$PORT"
+export CHROME_MANAGER_FORCE_HEADLESS="$CHROME_MANAGER_FORCE_HEADLESS"
+export CHROME_MANAGER_ENABLE_WEBGL="$CHROME_MANAGER_ENABLE_WEBGL"
 
 echo -e "${GREEN}>>> Chrome Fleet Control Launcher <<<${NC}"
 echo "User: $NIKKO_CHROME_USERNAME"
 echo "Port: $PORT"
+echo "CHROME_MANAGER_FORCE_HEADLESS: $CHROME_MANAGER_FORCE_HEADLESS"
+echo "CHROME_MANAGER_ENABLE_WEBGL: $CHROME_MANAGER_ENABLE_WEBGL"
 
 # --- Dependency Check ---
 MISSING_DEPS=0
@@ -140,7 +152,7 @@ if [ "$RUN_IN_SCREEN" == "true" ]; then
         # On macOS, we use 'bash -l' to ensure login profile is loaded if needed, 
         # but here we just want to make sure node is found.
         CURRENT_PATH="$PATH"
-        screen -dmS "$SESSION_NAME" bash -c "export PATH='$CURRENT_PATH'; export NIKKO_CHROME_USERNAME='$USERNAME'; export NIKKO_CHROME_PASSWORD='$PASSWORD'; export PORT='$PORT'; node server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
+        screen -dmS "$SESSION_NAME" bash -c "export PATH='$CURRENT_PATH'; export NIKKO_CHROME_USERNAME='$USERNAME'; export NIKKO_CHROME_PASSWORD='$PASSWORD'; export PORT='$PORT'; export CHROME_MANAGER_FORCE_HEADLESS='$CHROME_MANAGER_FORCE_HEADLESS'; export CHROME_MANAGER_ENABLE_WEBGL='$CHROME_MANAGER_ENABLE_WEBGL'; node server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
         
         # Give it a second to start
         sleep 1
