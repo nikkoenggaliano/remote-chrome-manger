@@ -32,6 +32,10 @@ const localOptionsCheckboxes = document.getElementById('localOptionsCheckboxes')
 const useSocat = document.getElementById('use_socat');
 const inputDebugPort = document.getElementById('inputDebugPort');
 const inputForwardPort = document.getElementById('inputForwardPort');
+const editInstanceForm = document.getElementById('editInstanceForm');
+const editInstanceName = document.getElementById('editInstanceName');
+const editInstanceNotes = document.getElementById('editInstanceNotes');
+const editInstanceModal = new bootstrap.Modal(document.getElementById('editInstanceModal'));
 
 // Control Modal
 const controlModalEl = document.getElementById('controlModal');
@@ -56,6 +60,7 @@ let currentInstanceId = null;
 let currentTabId = null;
 let statsInterval = null;
 let currentLogInstanceId = null;
+let currentEditInstanceId = null;
 
 // --- Init ---
 
@@ -253,6 +258,9 @@ function getActions(inst, small = false) {
         <button class="btn ${btnClass}" onclick="openLogs(${inst.id})">
             <i class="bi bi-journal-text"></i> ${small ? '' : 'Logs'}
         </button>
+        <button class="btn ${btnClass}" onclick="openEditInstance(${inst.id})" ${inst.status !== 'stopped' ? 'disabled' : ''}>
+            <i class="bi bi-pencil-square"></i> ${small ? '' : 'Edit'}
+        </button>
         <button class="btn ${small ? 'btn-sm btn-outline-danger' : 'btn-sm btn-outline-danger'}" onclick="deleteInstance(${inst.id})">
             <i class="bi bi-trash"></i>
         </button>
@@ -263,6 +271,43 @@ function getActions(inst, small = false) {
 async function startInstance(id) { await fetchAPI(`/api/instances/${id}/start`, 'POST'); }
 async function stopInstance(id) { await fetchAPI(`/api/instances/${id}/stop`, 'POST'); }
 async function deleteInstance(id) { if (confirm('Delete this instance?')) await fetchAPI(`/api/instances/${id}`, 'DELETE'); }
+
+function openEditInstance(id) {
+    const inst = allInstances.find(item => item.id === id);
+    if (!inst) {
+        alert('Instance not found');
+        return;
+    }
+    currentEditInstanceId = id;
+    editInstanceName.value = inst.name || '';
+    editInstanceNotes.value = inst.notes || '';
+    editInstanceModal.show();
+}
+
+editInstanceForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!currentEditInstanceId) return;
+
+    const payload = {
+        name: editInstanceName.value.trim(),
+        notes: editInstanceNotes.value.trim()
+    };
+
+    const res = await fetch(`/api/instances/${currentEditInstanceId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        alert('Error: ' + (err.error || 'Failed to update instance'));
+        return;
+    }
+
+    editInstanceModal.hide();
+    currentEditInstanceId = null;
+});
 
 addInstanceForm.addEventListener('submit', async (e) => {
     e.preventDefault();

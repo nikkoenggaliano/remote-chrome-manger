@@ -287,6 +287,34 @@
         </div>
     </div>
 
+    <!-- Edit Instance -->
+    <div class="modal fade" id="editInstanceModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content modal-content-theme">
+                <div class="modal-header modal-header-theme">
+                    <h5 class="modal-title fw-bold">Edit Instance</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <form id="editInstanceForm">
+                        <div class="mb-3">
+                            <label class="form-label text-theme-muted small fw-bold">INSTANCE NAME</label>
+                            <input type="text" class="form-control form-control-theme" id="editInstanceName" required>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label text-theme-muted small fw-bold">NOTES</label>
+                            <textarea class="form-control form-control-theme" id="editInstanceNotes" rows="3" placeholder="Instance notes..."></textarea>
+                        </div>
+                        <div class="modal-footer modal-footer-theme px-0 pb-0">
+                            <button type="button" class="btn btn-theme-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button type="submit" class="btn btn-primary px-4">Save</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Edit Config -->
     <div class="modal fade" id="addConfigModal" tabindex="-1">
         <div class="modal-dialog">
