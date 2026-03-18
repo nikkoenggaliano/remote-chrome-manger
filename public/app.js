@@ -36,6 +36,14 @@ const editInstanceForm = document.getElementById('editInstanceForm');
 const editInstanceName = document.getElementById('editInstanceName');
 const editInstanceNotes = document.getElementById('editInstanceNotes');
 const editInstanceModal = new bootstrap.Modal(document.getElementById('editInstanceModal'));
+const importCookiesModalEl = document.getElementById('importCookiesModal');
+const importCookiesModal = new bootstrap.Modal(importCookiesModalEl);
+const importCookiesForm = document.getElementById('importCookiesForm');
+const importCookiesInstanceName = document.getElementById('importCookiesInstanceName');
+const importCookiesFilesInput = document.getElementById('importCookiesFiles');
+const importCookiesSelectedFiles = document.getElementById('importCookiesSelectedFiles');
+const importCookiesResult = document.getElementById('importCookiesResult');
+const importCookiesSubmitBtn = document.getElementById('importCookiesSubmitBtn');
 
 // Control Modal
 const controlModalEl = document.getElementById('controlModal');
@@ -61,6 +69,7 @@ let currentTabId = null;
 let statsInterval = null;
 let currentLogInstanceId = null;
 let currentEditInstanceId = null;
+let currentImportInstanceId = null;
 
 // --- Init ---
 
@@ -213,7 +222,7 @@ function renderInstances(instances) {
                         <i class="bi bi-sticky me-1"></i> ${escapeHtml(inst.notes)}
                     </div>` : ''}
                 </div>
-                <div class="card-footer d-flex gap-2 p-2">
+                <div class="card-footer d-flex flex-wrap gap-2 p-2">
                      ${getActions(inst)}
                 </div>
             </div>
@@ -232,7 +241,7 @@ function renderInstances(instances) {
             <td class="font-monospace">${inst.host}:${inst.port}</td>
             <td class="font-monospace">${inst.forward_port || '-'}</td>
             <td>
-                <div class="d-flex gap-2">
+                <div class="d-flex flex-wrap gap-2">
                     ${getActions(inst, true)}
                 </div>
             </td>
@@ -242,6 +251,7 @@ function renderInstances(instances) {
 
 function getActions(inst, small = false) {
     const btnClass = small ? 'btn-sm btn-theme-secondary' : 'btn-sm flex-grow-1 btn-theme-secondary';
+    const canImportCookies = inst.type === 'external' || inst.status === 'running';
     
     let startStopBtn = '';
     if (inst.status === 'stopped') {
@@ -257,6 +267,9 @@ function getActions(inst, small = false) {
         </button>
         <button class="btn ${btnClass}" onclick="openLogs(${inst.id})">
             <i class="bi bi-journal-text"></i> ${small ? '' : 'Logs'}
+        </button>
+        <button class="btn ${btnClass}" onclick="openImportCookies(${inst.id})" title="Import Cookies" ${canImportCookies ? '' : 'disabled'}>
+            <i class="bi bi-box-arrow-in-down"></i> ${small ? '' : 'Import Cookies'}
         </button>
         <button class="btn ${btnClass}" onclick="openEditInstance(${inst.id})" ${inst.status !== 'stopped' ? 'disabled' : ''}>
             <i class="bi bi-pencil-square"></i> ${small ? '' : 'Edit'}
@@ -284,6 +297,21 @@ function openEditInstance(id) {
     editInstanceModal.show();
 }
 
+function openImportCookies(id) {
+    const inst = allInstances.find(item => item.id === id);
+    if (!inst) {
+        alert('Instance not found');
+        return;
+    }
+
+    currentImportInstanceId = id;
+    importCookiesForm.reset();
+    importCookiesInstanceName.value = inst.name || '';
+    setImportCookiesResult('', 'secondary', true);
+    renderImportCookieFiles([]);
+    importCookiesModal.show();
+}
+
 editInstanceForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (!currentEditInstanceId) return;
@@ -307,6 +335,54 @@ editInstanceForm.addEventListener('submit', async (e) => {
 
     editInstanceModal.hide();
     currentEditInstanceId = null;
+});
+
+importCookiesModalEl.addEventListener('hidden.bs.modal', () => {
+    currentImportInstanceId = null;
+    importCookiesForm.reset();
+    setImportCookiesResult('', 'secondary', true);
+    renderImportCookieFiles([]);
+    setImportSubmitState(false);
+});
+
+importCookiesFilesInput.addEventListener('change', () => {
+    renderImportCookieFiles(Array.from(importCookiesFilesInput.files || []));
+});
+
+importCookiesForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    if (!currentImportInstanceId) {
+        alert('Instance not selected');
+        return;
+    }
+
+    const files = Array.from(importCookiesFilesInput.files || []);
+    if (!files.length) {
+        setImportCookiesResult('Select at least one cookie file.', 'danger');
+        return;
+    }
+
+    setImportSubmitState(true);
+    setImportCookiesResult('', 'secondary', true);
+
+    try {
+        const payloadFiles = await Promise.all(files.map(readFileAsText));
+        const result = await fetchJsonOrThrow(`/api/instances/${currentImportInstanceId}/cookies/import`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ files: payloadFiles })
+        });
+
+        const summary = formatCookieImportSummary(result);
+        setImportCookiesResult(summary, result.failed || result.file_errors?.length ? 'warning' : 'success');
+        alert(summary);
+        importCookiesModal.hide();
+    } catch (error) {
+        setImportCookiesResult(error.message || 'Failed to import cookies.', 'danger');
+    } finally {
+        setImportSubmitState(false);
+    }
 });
 
 addInstanceForm.addEventListener('submit', async (e) => {
@@ -481,6 +557,77 @@ async function deleteConfig(key) { if(confirm('Delete?')) { await fetchAPI(`/api
 
 // --- Utils ---
 async function fetchAPI(url, method = 'GET', body = null) { const opts = { method }; if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); } const res = await fetch(url, opts); if (res.status === 401) { window.location.reload(); return null; } return res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text(); }
+async function fetchJsonOrThrow(url, options = {}) {
+    const res = await fetch(url, options);
+    if (res.status === 401) {
+        window.location.reload();
+        return null;
+    }
+
+    const isJson = res.headers.get('content-type')?.includes('application/json');
+    const payload = isJson ? await res.json() : { error: await res.text() };
+    if (!res.ok) {
+        throw new Error(payload.error || `Request failed with status ${res.status}`);
+    }
+    return payload;
+}
+function renderImportCookieFiles(files) {
+    if (!files.length) {
+        importCookiesSelectedFiles.innerHTML = 'No files selected.';
+        return;
+    }
+
+    importCookiesSelectedFiles.innerHTML = files.map((file) => `
+        <div class="d-flex justify-content-between align-items-center gap-3">
+            <span class="text-break">${escapeHtml(file.name)}</span>
+            <span class="badge bg-secondary">${formatBytes(file.size)}</span>
+        </div>
+    `).join('');
+}
+function setImportCookiesResult(message, tone = 'secondary', hidden = false) {
+    importCookiesResult.className = 'alert mb-0';
+    if (hidden || !message) {
+        importCookiesResult.classList.add('d-none');
+        importCookiesResult.textContent = '';
+        return;
+    }
+
+    importCookiesResult.classList.add(`alert-${tone}`);
+    importCookiesResult.classList.remove('d-none');
+    importCookiesResult.textContent = message;
+}
+function setImportSubmitState(isLoading) {
+    importCookiesSubmitBtn.disabled = isLoading;
+    importCookiesFilesInput.disabled = isLoading;
+    importCookiesSubmitBtn.innerHTML = isLoading
+        ? '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Importing...'
+        : 'Import';
+}
+async function readFileAsText(file) {
+    const content = await file.text();
+    return { name: file.name, content };
+}
+function formatCookieImportSummary(result) {
+    const fileCount = (Array.isArray(result.files) ? result.files.length : 0) + (Array.isArray(result.file_errors) ? result.file_errors.length : 0);
+    const parts = [
+        `Imported ${result.imported || 0} cookies from ${fileCount} file(s).`
+    ];
+
+    if (Array.isArray(result.file_errors) && result.file_errors.length) {
+        parts.push(`File parse issues: ${result.file_errors.map((item) => `${item.name}: ${item.error}`).join(' | ')}`);
+    }
+
+    if (Array.isArray(result.failures) && result.failures.length) {
+        const failedCookies = result.failures
+            .slice(0, 5)
+            .map((item) => `${item.name}${item.domain ? `@${item.domain}` : ''}: ${item.error}`)
+            .join(' | ');
+        const extraCount = result.failures.length > 5 ? ` (+${result.failures.length - 5} more)` : '';
+        parts.push(`CDP rejected ${result.failures.length} cookie(s): ${failedCookies}${extraCount}`);
+    }
+
+    return parts.join('\n');
+}
 function formatBytes(bytes) { if (!+bytes) return '0 B'; const i = Math.floor(Math.log(bytes) / Math.log(1024)); return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${['B','KB','MB','GB'][i]}`; }
 function formatUptime(s) { const h = Math.floor(s/3600); const m = Math.floor((s%3600)/60); return `${h}h ${m}m`; }
 function escapeHtml(t) { return t ? t.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : ''; }

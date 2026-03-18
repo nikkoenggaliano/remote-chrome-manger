@@ -9,6 +9,7 @@ Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium ins
 - Keep separate browser profiles per instance
 - Port forwarding through `socat`
 - `Xvfb` support for headless Linux display sessions
+- Import cookies into a running browser instance through CDP from Netscape or JSON exports
 - Server dashboard for CPU, memory, disk, uptime, and network interfaces
 - Basic Auth for the UI and legacy `/api/*` endpoints
 - Optional API key protected REST API under `/rest/*`
@@ -202,6 +203,26 @@ The REST API also exposes the same operational features that exist in the legacy
 - `DELETE /instances/:id/tabs/:tabId`
 - `GET /instances/:id/tabs/:tabId/screenshot`
 - `POST /instances/:id/tabs/:tabId/input`
+- `POST /instances/:id/cookies/import`
+
+`POST /instances/:id/cookies/import` expects JSON like:
+
+```json
+{
+  "files": [
+    {
+      "name": "x.com_cookies.txt",
+      "content": "# Netscape HTTP Cookie File\n..."
+    }
+  ]
+}
+```
+
+Supported import formats:
+
+- Netscape cookie files such as browser-exported `.txt`
+- JSON arrays of cookies
+- JSON objects containing a `cookies` array
 
 ## `curl` Examples
 
@@ -243,4 +264,14 @@ Health check:
 
 ```bash
 curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/healthz
+```
+
+Import cookies:
+
+```bash
+curl -X POST \
+  -H "X-API-Key: super-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"files":[{"name":"x.com_cookies.txt","content":"# Netscape HTTP Cookie File\n.x.com\tTRUE\t/\tTRUE\t1808403617\tauth_token\tvalue"}]}' \
+  http://localhost:3000/rest/instances/1/cookies/import
 ```

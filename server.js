@@ -9,6 +9,7 @@ const basicAuth = require('express-basic-auth');
 const db = require('./lib/db');
 const chromeManager = require('./lib/chrome-manager');
 const cdpClient = require('./lib/cdp-client');
+const { parseCookieFiles } = require('./lib/cookie-import');
 const { runChecks } = require('./lib/dep-check');
 
 // --- Server Log Capture ---
@@ -58,7 +59,7 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
 const legacyApi = express.Router();
 const restApi = express.Router();
@@ -676,6 +677,39 @@ async function handleInput(req, res) {
   res.json({ success: true });
 }
 
+async function handleImportCookies(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const files = Array.isArray(req.body?.files) ? req.body.files : null;
+
+  if (!files || files.length === 0) {
+    throw createHttpError(400, 'Missing cookie files');
+  }
+
+  if (instance.type === 'local' && instance.status !== 'running') {
+    throw createHttpError(400, `Instance "${instance.name}" is ${instance.status}. Start it first so the CDP port ${instance.host}:${instance.port} is available.`);
+  }
+
+  let parsed;
+  try {
+    parsed = parseCookieFiles(files);
+  } catch (error) {
+    throw createHttpError(400, error.message);
+  }
+
+  const importResult = await cdpClient.importCookies(instance.host, instance.port, parsed.cookies);
+
+  res.json({
+    success: true,
+    instance_id: instance.id,
+    imported: importResult.imported,
+    failed: importResult.failed,
+    failures: importResult.failures,
+    files: parsed.files,
+    file_errors: parsed.errors,
+    total_cookies: parsed.cookies.length,
+  });
+}
+
 function registerRoutes(router) {
   router.get('/server/stats', withErrorBoundary(handleGetServerStats));
   router.get('/server/logs', withErrorBoundary(handleGetServerLogs));
@@ -703,6 +737,7 @@ function registerRoutes(router) {
   router.delete('/instances/:id/tabs/:tabId', withErrorBoundary(handleDeleteTab));
   router.get('/instances/:id/tabs/:tabId/screenshot', withErrorBoundary(handleScreenshot));
   router.post('/instances/:id/tabs/:tabId/input', withErrorBoundary(handleInput));
+  router.post('/instances/:id/cookies/import', withErrorBoundary(handleImportCookies));
 }
 
 registerRoutes(legacyApi);
