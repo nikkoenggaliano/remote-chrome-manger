@@ -441,8 +441,9 @@ async function fetchStats() {
     if (!stats) return;
 
     // CPU
-    document.getElementById('stats-cpus').innerText = stats.cpus;
-    document.getElementById('stats-cpu-model').innerText = stats.cpu_model;
+    const cpuUsage = typeof stats.cpu_usage_percent === 'number' ? `${stats.cpu_usage_percent.toFixed(2)}%` : '0%';
+    document.getElementById('stats-cpus').innerText = cpuUsage;
+    document.getElementById('stats-cpu-model').innerText = `${stats.cpu_model} • ${stats.cpus} cores`;
     
     // Memory
     const usedMem = stats.totalmem - stats.freemem;

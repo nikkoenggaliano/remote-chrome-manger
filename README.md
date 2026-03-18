@@ -1,129 +1,246 @@
 # Chrome Fleet Control
 
-A web interface to control multiple Chrome browsers remotely using Chrome DevTools Protocol (CDP).
+Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium instances through the Chrome DevTools Protocol (CDP). It supports isolated profiles, optional port forwarding, per-instance logs, tab control, and an optional REST API.
 
 ## Features
-- Create local Chrome instances with unique profiles.
-- Support for Xvfb (headless display) and Socat (port forwarding).
-- Connect and control external Chrome resources.
-- Real-time status updates via Socket.io.
-- Tab management (new, close, navigate).
-- Live screenshots/thumbnails of tabs.
-- SQLite3 database for persistence.
 
-## Prerequisites
-- Node.js (Latest)
-- Google Chrome or Chromium
-- `socat` (Optional, for port forwarding) [but better install]
-- `Xvfb` (Optional, for Linux headless display) [but better install]
+- Create, edit, and delete local or external browser instances
+- Start, stop, and inspect instances from the web UI
+- Keep separate browser profiles per instance
+- Port forwarding through `socat`
+- `Xvfb` support for headless Linux display sessions
+- Server dashboard for CPU, memory, disk, uptime, and network interfaces
+- Basic Auth for the UI and legacy `/api/*` endpoints
+- Optional API key protected REST API under `/rest/*`
+- `run.sh` enables headless and WebGL-friendly Chrome flags by default
 
-### Install Prerequisites
+## Requirements
 
-Before starting, make sure you have the following dependencies installed on your system:
+- Node.js and npm
+- Google Chrome, Chromium, or Chrome for Testing
+- `socat`
+- `lsof`
+- `wget` and `unzip` if you want to download a portable browser binary
+- `screen` if you want `RUN_IN_SCREEN=true`
+- `Xvfb` if you run Linux in a headless display setup
 
-#### 1. **Node.js (Latest)**
-   - For most systems, you can install Node.js using the following commands:
-     - **macOS & Linux** minimum 22 can be 24 or even latest: 
+## Browser Installation
 
-       ```bash
-       curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
-       sudo apt-get install -y nodejs
-       ```
-     - **Windows**: 
-       Download the latest Node.js version from the [official Node.js website](https://nodejs.org/) and follow the installer steps.
+### Recommended: auto-detect OS and architecture, then download official Chrome for Testing with `wget`
 
-#### 2. **Google Chrome or Chromium**
-   - **macOS**:
-     - Install via Homebrew:
-       ```bash
-       brew install --cask google-chrome
-       ```
-   - **Linux (Ubuntu)**:
-     - To install Google Chrome:
-       ```bash
-       sudo apt update
-       sudo apt install google-chrome-stable
-       ```
-     - To install Chromium:
-       ```bash
-       sudo apt update
-       sudo apt install chromium-browser
-       ```
-   - **Windows**:
-     Download and install from [Google Chrome's official website](https://www.google.com/chrome/), or use the [Chromium download page](https://www.chromium.org/getting-involved/download-chromium).
-     
-#### **Google Chrome or Chromium**
+This example detects the current OS and CPU architecture, resolves the matching official Chrome for Testing download, and extracts it into the project directory.
 
-If you'd prefer to download the `.deb` package and install Google Chrome manually, follow these steps:
-
-- **Download the .deb file**:
-    - Go to the [Google Chrome download page](https://www.google.com/chrome/) and download the `.deb` file for Debian/Ubuntu-based systems.
-
-- **Install the .deb package**:
-    After downloading, open a terminal and run the following commands:
-    ```bash
-    sudo dpkg -i ~/Downloads/google-chrome-stable_current_amd64.deb
-    sudo apt --fix-broken install
-    ```
-    This will install Google Chrome and fix any missing dependencies.
-
-- **Alternatively**, if you want to install Chromium instead, follow the same steps but download the `.deb` package from the [Chromium download page](https://www.chromium.org/getting-involved/download-chromium).
-
-This method avoids using the `apt` package manager and gives you the latest `.deb` package directly from Google's website.
-
-
-#### 3. **`socat` (Optional, for port forwarding)**
-   - **macOS & Linux**:
-     - Install using Homebrew (macOS) or `apt-get` (Linux):
-       ```bash
-       brew install socat
-       ```
-       or
-       ```bash
-       sudo apt install socat
-       ```
-   - **Windows**: 
-     Download the `socat` Windows binary from [here](http://www.dest-unreach.org/socat/).
-
-#### 4. **`Xvfb` (Optional, for Linux headless display)**
-   - **Linux (Ubuntu)**:
-     Install `Xvfb` with:
-     ```bash
-     sudo apt update
-     sudo apt install xvfb
-     ```
-   - **macOS & Windows**: This step is typically not required for macOS and Windows systems as they support GUI natively.
-
-Once you've installed these prerequisites, you're ready to proceed with setting up your environment!
-
-
-## Installing
+If the extracted folder matches one of the app's built-in browser search paths, the app can auto-detect it without additional config.
 
 ```bash
-npm install
+PROJECT_DIR="$(pwd)"
+
+case "$(uname -s):$(uname -m)" in
+  Linux:x86_64|Linux:amd64)
+    CFT_PLATFORM="linux64"
+    CFT_DIR="chrome-linux64"
+    CHROME_BIN_PATH="$PROJECT_DIR/chrome-linux64/chrome"
+    ;;
+  Darwin:arm64|Darwin:aarch64)
+    CFT_PLATFORM="mac-arm64"
+    CFT_DIR="chrome-mac-arm64"
+    CHROME_BIN_PATH="$PROJECT_DIR/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    ;;
+  Darwin:x86_64)
+    CFT_PLATFORM="mac-x64"
+    CFT_DIR="chrome-mac-x64"
+    CHROME_BIN_PATH="$PROJECT_DIR/chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"
+    ;;
+  MINGW*:x86_64|MSYS_NT*:x86_64|CYGWIN*:x86_64)
+    CFT_PLATFORM="win64"
+    CFT_DIR="chrome-win64"
+    CHROME_BIN_PATH="$PROJECT_DIR/chrome-win64/chrome.exe"
+    ;;
+  MINGW*:i686|MSYS_NT*:i686|CYGWIN*:i686)
+    CFT_PLATFORM="win32"
+    CFT_DIR="chrome-win32"
+    CHROME_BIN_PATH="$PROJECT_DIR/chrome-win32/chrome.exe"
+    ;;
+  *)
+    echo "Unsupported OS/arch: $(uname -s) $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+CFT_JSON="https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json"
+CFT_URL="$(wget -qO- "$CFT_JSON" | node -e 'const fs = require("fs"); const data = JSON.parse(fs.readFileSync(0, "utf8")); const platform = process.argv[1]; const item = data.channels.Stable.downloads.chrome.find((entry) => entry.platform === platform); if (!item) { console.error(`No Chrome for Testing download found for ${platform}`); process.exit(1); } process.stdout.write(item.url);' "$CFT_PLATFORM")"
+ARCHIVE_PATH="/tmp/$(basename "$CFT_URL")"
+
+wget -O "$ARCHIVE_PATH" "$CFT_URL"
+rm -rf "$PROJECT_DIR/$CFT_DIR"
+unzip -q "$ARCHIVE_PATH" -d "$PROJECT_DIR"
+
+echo "Downloaded platform: $CFT_PLATFORM"
+echo "Chrome binary: $CHROME_BIN_PATH"
+export CHROME_BIN="$CHROME_BIN_PATH"
 ```
 
-## Running 
+Notes:
+
+- At the time of writing, the official stable Chrome for Testing JSON publishes `linux64`, `mac-arm64`, `mac-x64`, `win32`, and `win64`.
+- If your platform is not published in that list, use your own Chrome or Chromium binary and point `CHROME_BIN` to it.
+- On Linux and macOS, extracting into the project root matches the app's built-in browser auto-detection paths.
+
+### Alternative: Debian or Ubuntu x86_64 system package
+
+If you specifically want the system-wide Google Chrome `.deb` package:
+
+```bash
+wget -O /tmp/google-chrome-stable_current_amd64.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+sudo apt-get install -y /tmp/google-chrome-stable_current_amd64.deb
+```
+
+### Using your own Chromium or custom Chrome binary
+
+If you already have a browser binary, just point `CHROME_BIN` to it:
+
+```bash
+export CHROME_BIN="/absolute/path/to/chrome"
+```
+
+## Environment Preparation
+
+Run the preflight checker before starting the server:
+
+```bash
+./prep.sh
+```
+
+If you want the script to try installing dependencies that can be installed automatically:
+
+```bash
+./prep.sh AUTO_INSTALL=true
+```
+
+`prep.sh` will:
+
+- detect OS family and available package manager
+- check `node`, `npm`, browser availability, `socat`, `Xvfb`, `screen`, and `lsof`
+- run `npm install` when `node_modules` is missing
+
+## Running the Application
+
+Standard foreground mode:
+
 ```bash
 ./run.sh USERNAME=admin PASSWORD=admin PORT=3000
 ```
 
-or auto in `screen` 
+Background mode through `screen`:
 
 ```bash
 ./run.sh USERNAME=admin PASSWORD=admin PORT=3000 RUN_IN_SCREEN=true
-``` 
-
-Then open `http://localhost:3000` (or your custom port) in your browser.
-
-
-## macOS Notes
-On macOS, Google Chrome is expected at `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome`. You can override this with the `CHROME_BIN` environment variable.
-
-
-```bash
-export CHROME_BIN="/path/to/chrome"
-node server.js
 ```
 
-Or even just normally running and change it on configuration menu!
+REST API enabled:
+
+```bash
+./run.sh USERNAME=admin PASSWORD=admin PORT=3000 REST_API=true REST_API_KEY=super-secret-key
+```
+
+Notes:
+
+- `run.sh` enables `CHROME_MANAGER_FORCE_HEADLESS=1` and `CHROME_MANAGER_ENABLE_WEBGL=1` by default.
+- If `REST_API=true` and `REST_API_KEY` is empty, the launcher aborts.
+
+## Authentication
+
+- The UI and legacy `/api/*` endpoints use Basic Auth with `USERNAME` and `PASSWORD`.
+- The REST API under `/rest/*` is only enabled when `REST_API=true`.
+- The REST API accepts `X-API-Key: <key>` or `Authorization: Bearer <key>`.
+
+## Main REST Endpoints
+
+All endpoints below are mounted under `/rest` when the REST API is enabled.
+
+### Instances
+
+- `GET /instances`
+- `GET /instances/:id`
+- `POST /instances`
+- `PUT /instances/:id`
+- `PATCH /instances/:id`
+- `DELETE /instances/:id`
+- `POST /instances/:id/start`
+- `POST /instances/:id/spawn`
+- `POST /instances/:id/stop`
+- `GET /instances/:id/logs`
+
+`GET /instances/:id` includes:
+
+- `host` and `port`
+- `debug_endpoints`
+- `forward_targets`
+- `forward_to`
+
+### Health and Server
+
+- `GET /healthz`
+- `GET /healtz`
+- `GET /server/stats`
+- `GET /server/logs`
+- `GET /server/healthz`
+- `GET /server/healtz`
+
+`/healthz` returns CPU usage, memory usage, disk usage, uptime, network interfaces, and an instance status summary.
+
+### Config and Tab Control
+
+The REST API also exposes the same operational features that exist in the legacy `/api` surface:
+
+- `GET /config`
+- `POST /config`
+- `DELETE /config/:key`
+- `GET /instances/:id/tabs`
+- `POST /instances/:id/tabs/new`
+- `POST /instances/:id/tabs/:tabId/navigate`
+- `DELETE /instances/:id/tabs/:tabId`
+- `GET /instances/:id/tabs/:tabId/screenshot`
+- `POST /instances/:id/tabs/:tabId/input`
+
+## `curl` Examples
+
+List instances:
+
+```bash
+curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances
+```
+
+Get instance details:
+
+```bash
+curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances/1
+```
+
+Spawn an instance:
+
+```bash
+curl -X POST -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances/1/spawn
+```
+
+Update an instance:
+
+```bash
+curl -X PATCH \
+  -H "X-API-Key: super-secret-key" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Chrome-1001","notes":"updated from REST"}' \
+  http://localhost:3000/rest/instances/1
+```
+
+Delete an instance:
+
+```bash
+curl -X DELETE -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances/1
+```
+
+Health check:
+
+```bash
+curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/healthz
+```
