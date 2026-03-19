@@ -212,9 +212,9 @@ function renderInstances(instances) {
                     <div class="mb-3" title="${escapeHtml(inst.launch_reason || '')}">
                         <small class="text-theme-muted d-block fw-bold" style="font-size: 0.7rem;">MODE</small>
                         <div class="d-flex flex-wrap gap-2 mb-1">
-                            ${renderLaunchFlags(inst)}
+                            ${renderHeadlessStackFlag(inst)}
                         </div>
-                        <span class="small text-theme-muted">${escapeHtml(inst.launch_mode_label || 'Unknown')}</span>
+                        <span class="small text-theme-muted">${escapeHtml(inst.launch_backend_label || inst.launch_mode_label || 'Unknown')}</span>
                     </div>
                     
                     <div class="mb-2">
@@ -251,9 +251,9 @@ function renderInstances(instances) {
             <td><span class="badge ${inst.type === 'local' ? 'bg-info' : 'bg-warning'} text-dark">${inst.type}</span></td>
             <td title="${escapeHtml(inst.launch_reason || '')}">
                 <div class="d-flex flex-wrap gap-1 mb-1">
-                    ${renderLaunchFlags(inst)}
+                    ${renderHeadlessStackFlag(inst)}
                 </div>
-                <div class="x-small text-theme-muted">${escapeHtml(inst.launch_mode_label || 'Unknown')}</div>
+                <div class="x-small text-theme-muted">${escapeHtml(inst.launch_backend_label || inst.launch_mode_label || 'Unknown')}</div>
             </td>
             <td class="font-monospace">${inst.host}:${inst.port}</td>
             <td class="font-monospace">${inst.forward_port || '-'}</td>
@@ -266,15 +266,13 @@ function renderInstances(instances) {
     `).join('');
 }
 
-function renderLaunchFlags(inst) {
-    return [
-        getLaunchFlagBadge('XVFB', inst.xvfb_enabled, 'primary'),
-        getLaunchFlagBadge('HEADLESS', inst.headless_enabled, 'dark')
-    ].join('');
+function renderHeadlessStackFlag(inst) {
+    const enabled = Boolean(inst.headless_stack_enabled);
+    return getLaunchFlagBadge('XVFB = HEADLESS', enabled, enabled ? 'success' : 'secondary');
 }
 
-function getLaunchFlagBadge(label, enabled, enabledVariant) {
-    return `<span class="badge bg-${enabled ? enabledVariant : 'secondary'}">${label} ${enabled ? 'ON' : 'OFF'}</span>`;
+function getLaunchFlagBadge(label, enabled, variant) {
+    return `<span class="badge bg-${variant}">${label} ${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function getActions(inst, small = false) {
