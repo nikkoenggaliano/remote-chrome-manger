@@ -84,8 +84,9 @@ if [ -z "${PORT:-}" ]; then
 fi
 
 # Chrome manager runtime defaults (can be overridden via args)
+# Per-instance "Use Xvfb / Headless" is now authoritative for local spawns.
 if [ -z "${CHROME_MANAGER_FORCE_HEADLESS:-}" ]; then
-  CHROME_MANAGER_FORCE_HEADLESS=1
+  CHROME_MANAGER_FORCE_HEADLESS=0
 fi
 if [ -z "${CHROME_MANAGER_ENABLE_WEBGL:-}" ]; then
   CHROME_MANAGER_ENABLE_WEBGL=1
@@ -94,7 +95,7 @@ fi
 # Check Auth
 if [ -z "${USERNAME:-}" ] || [ -z "${PASSWORD:-}" ]; then
   echo -e "${RED}Error: USERNAME and PASSWORD are required.${NC}"
-  echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [PORT=3000] [RUN_IN_SCREEN=true] [REST_API=true] [REST_API_KEY=secret] [AUTO_INSTALL=true] [CHROME_MANAGER_FORCE_HEADLESS=1] [CHROME_MANAGER_ENABLE_WEBGL=1]"
+  echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [PORT=3000] [RUN_IN_SCREEN=true] [REST_API=true] [REST_API_KEY=secret] [AUTO_INSTALL=true] [CHROME_MANAGER_FORCE_HEADLESS=0] [CHROME_MANAGER_ENABLE_WEBGL=1]"
   exit 1
 fi
 
@@ -123,7 +124,7 @@ echo "User: $NIKKO_CHROME_USERNAME"
 echo "Port: $PORT"
 echo "REST_API: $REST_API"
 echo "Node: $NODE_BIN"
-echo "CHROME_MANAGER_FORCE_HEADLESS: $CHROME_MANAGER_FORCE_HEADLESS"
+echo "CHROME_MANAGER_FORCE_HEADLESS (legacy env): $CHROME_MANAGER_FORCE_HEADLESS"
 echo "CHROME_MANAGER_ENABLE_WEBGL: $CHROME_MANAGER_ENABLE_WEBGL"
 
 if [ -x "$SCRIPT_DIR/prep.sh" ]; then

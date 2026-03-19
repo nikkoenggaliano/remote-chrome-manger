@@ -8,12 +8,12 @@ Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium ins
 - Start, stop, and inspect instances from the web UI
 - Keep separate browser profiles per instance
 - Port forwarding through `socat`
-- `Xvfb` support for headless Linux display sessions
+- Per-instance `Xvfb` or Chrome headless mode with visible runtime flags
 - Import cookies into a running browser instance through CDP from Netscape or JSON exports
 - Server dashboard for CPU, memory, disk, uptime, and network interfaces
 - Basic Auth for the UI and legacy `/api/*` endpoints
 - Optional API key protected REST API under `/rest/*`
-- `run.sh` enables headless and WebGL-friendly Chrome flags by default
+- `run.sh` enables WebGL-friendly Chrome flags by default
 
 ## Requirements
 
@@ -146,7 +146,8 @@ REST API enabled:
 
 Notes:
 
-- `run.sh` enables `CHROME_MANAGER_FORCE_HEADLESS=1` and `CHROME_MANAGER_ENABLE_WEBGL=1` by default.
+- Local instance spawn mode is controlled per instance by the `Use Xvfb / Headless` toggle.
+- `run.sh` defaults `CHROME_MANAGER_FORCE_HEADLESS=0` and `CHROME_MANAGER_ENABLE_WEBGL=1`.
 - If `REST_API=true` and `REST_API_KEY` is empty, the launcher aborts.
 
 ## Authentication
@@ -175,6 +176,7 @@ All endpoints below are mounted under `/rest` when the REST API is enabled.
 `GET /instances/:id` includes:
 
 - `host` and `port`
+- `launch_mode`, `xvfb_enabled`, and `headless_enabled`
 - `debug_endpoints`
 - `forward_targets`
 - `forward_to`

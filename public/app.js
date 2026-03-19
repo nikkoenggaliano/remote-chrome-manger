@@ -29,6 +29,7 @@ const addInstanceForm = document.getElementById('addInstanceForm');
 const instanceType = document.getElementById('instanceType');
 const localOptionsInputs = document.getElementById('localOptionsInputs');
 const localOptionsCheckboxes = document.getElementById('localOptionsCheckboxes');
+const useXvfb = document.getElementById('use_xvfb');
 const useSocat = document.getElementById('use_socat');
 const inputDebugPort = document.getElementById('inputDebugPort');
 const inputForwardPort = document.getElementById('inputForwardPort');
@@ -123,8 +124,10 @@ addInstanceModalEl.addEventListener('show.bs.modal', () => {
     inputForwardPort.value = dPort + 1;
     
     // Default checkboxes
-    document.getElementById('use_xvfb').checked = true;
-    document.getElementById('use_socat').checked = true;
+    instanceType.value = 'local';
+    useXvfb.checked = true;
+    useSocat.checked = true;
+    syncInstanceTypeOptions();
 });
 
 // View Toggle
@@ -205,6 +208,14 @@ function renderInstances(instances) {
                         <span class="status-indicator status-${inst.status}"></span>
                         <span class="text-uppercase small fw-bold">${inst.status}</span>
                     </div>
+
+                    <div class="mb-3" title="${escapeHtml(inst.launch_reason || '')}">
+                        <small class="text-theme-muted d-block fw-bold" style="font-size: 0.7rem;">MODE</small>
+                        <div class="d-flex flex-wrap gap-2 mb-1">
+                            ${renderLaunchFlags(inst)}
+                        </div>
+                        <span class="small text-theme-muted">${escapeHtml(inst.launch_mode_label || 'Unknown')}</span>
+                    </div>
                     
                     <div class="mb-2">
                         <small class="text-theme-muted d-block fw-bold" style="font-size: 0.7rem;">HOST</small>
@@ -238,6 +249,12 @@ function renderInstances(instances) {
                 ${inst.notes ? `<div class="x-small text-theme-muted">${escapeHtml(inst.notes)}</div>` : ''}
             </td>
             <td><span class="badge ${inst.type === 'local' ? 'bg-info' : 'bg-warning'} text-dark">${inst.type}</span></td>
+            <td title="${escapeHtml(inst.launch_reason || '')}">
+                <div class="d-flex flex-wrap gap-1 mb-1">
+                    ${renderLaunchFlags(inst)}
+                </div>
+                <div class="x-small text-theme-muted">${escapeHtml(inst.launch_mode_label || 'Unknown')}</div>
+            </td>
             <td class="font-monospace">${inst.host}:${inst.port}</td>
             <td class="font-monospace">${inst.forward_port || '-'}</td>
             <td>
@@ -247,6 +264,17 @@ function renderInstances(instances) {
             </td>
         </tr>
     `).join('');
+}
+
+function renderLaunchFlags(inst) {
+    return [
+        getLaunchFlagBadge('XVFB', inst.xvfb_enabled, 'primary'),
+        getLaunchFlagBadge('HEADLESS', inst.headless_enabled, 'dark')
+    ].join('');
+}
+
+function getLaunchFlagBadge(label, enabled, enabledVariant) {
+    return `<span class="badge bg-${enabled ? enabledVariant : 'secondary'}">${label} ${enabled ? 'ON' : 'OFF'}</span>`;
 }
 
 function getActions(inst, small = false) {
@@ -400,6 +428,7 @@ addInstanceForm.addEventListener('submit', async (e) => {
         if (res.ok) {
             bootstrap.Modal.getInstance(document.getElementById('addInstanceModal')).hide();
             addInstanceForm.reset();
+            syncInstanceTypeOptions();
         } else {
             const err = await res.json();
             alert('Error: ' + (err.error || 'Failed to save instance'));
@@ -409,7 +438,22 @@ addInstanceForm.addEventListener('submit', async (e) => {
 
 [useSocat, inputDebugPort].forEach(el => { el.addEventListener('change', updateForwardPort); el.addEventListener('input', updateForwardPort); });
 function updateForwardPort() { if (useSocat.checked) { const debugPort = parseInt(inputDebugPort.value) || 0; if (debugPort > 0) inputForwardPort.value = debugPort + 1; } }
-instanceType.addEventListener('change', (e) => { const isLocal = e.target.value === 'local'; localOptionsInputs.style.display = isLocal ? 'block' : 'none'; localOptionsCheckboxes.style.display = isLocal ? 'block' : 'none'; });
+
+function syncInstanceTypeOptions() {
+    const isLocal = instanceType.value === 'local';
+    localOptionsInputs.style.display = isLocal ? 'block' : 'none';
+    localOptionsCheckboxes.style.display = isLocal ? 'block' : 'none';
+
+    localOptionsInputs.querySelectorAll('input, textarea, select').forEach((el) => {
+        el.disabled = !isLocal;
+    });
+    localOptionsCheckboxes.querySelectorAll('input').forEach((el) => {
+        el.disabled = !isLocal;
+    });
+}
+
+instanceType.addEventListener('change', syncInstanceTypeOptions);
+syncInstanceTypeOptions();
 
 // --- Logs ---
 async function openLogs(id) { currentLogInstanceId = id; logContent.innerText = 'Loading...'; logModal.show(); refreshInstanceLogs(); }

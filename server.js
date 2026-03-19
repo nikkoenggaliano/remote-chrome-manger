@@ -257,10 +257,18 @@ function buildForwardTargets(instance, interfaces) {
 
 function serializeInstance(instance, interfaces = getNetworkInterfaces()) {
   const forwardTargets = buildForwardTargets(instance, interfaces);
+  const launchState = chromeManager.getInstanceLaunchState(instance);
   return {
     ...instance,
     use_xvfb: Boolean(instance.use_xvfb),
     use_socat: Boolean(instance.use_socat),
+    launch_mode: launchState?.launch_mode || 'unknown',
+    launch_mode_label: launchState?.launch_mode_label || 'Unknown',
+    xvfb_enabled: Boolean(launchState?.xvfb_enabled),
+    headless_enabled: Boolean(launchState?.headless_enabled),
+    headless_stack_requested: Boolean(launchState?.headless_stack_requested),
+    launch_state_source: launchState?.launch_state_source || 'config',
+    launch_reason: launchState?.launch_reason || null,
     interfaces,
     debug_endpoints: buildDebugEndpoints(instance, interfaces),
     forward_targets: forwardTargets,
@@ -370,6 +378,14 @@ function validateInstancePayload(payload, { partial = false } = {}) {
 
 function applyInstanceDefaults(instance) {
   const next = { ...instance };
+
+  if (next.type === 'external') {
+    next.use_xvfb = false;
+    next.use_socat = false;
+    next.forward_port = null;
+    next.profile_dir = null;
+    return next;
+  }
 
   if (!next.use_socat) {
     next.forward_port = null;
