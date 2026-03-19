@@ -84,7 +84,7 @@ if [ -z "${PORT:-}" ]; then
 fi
 
 # Chrome manager runtime defaults (can be overridden via args)
-# Per-instance "Use Xvfb / Headless" is now authoritative for local spawns.
+# Per-instance launch_mode is authoritative for local spawns.
 if [ -z "${CHROME_MANAGER_FORCE_HEADLESS:-}" ]; then
   CHROME_MANAGER_FORCE_HEADLESS=0
 fi

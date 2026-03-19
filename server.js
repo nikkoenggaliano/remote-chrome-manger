@@ -260,10 +260,10 @@ function serializeInstance(instance, interfaces = getNetworkInterfaces()) {
   const launchState = chromeManager.getInstanceLaunchState(instance);
   return {
     ...instance,
-    use_xvfb: Boolean(instance.use_xvfb),
+    use_xvfb: launchState?.launch_mode === 'xvfb',
     use_socat: Boolean(instance.use_socat),
     headless_stack_enabled: Boolean(launchState?.headless_stack_enabled),
-    launch_mode: launchState?.launch_mode || 'unknown',
+    launch_mode: launchState?.launch_mode || instance.launch_mode || 'unknown',
     launch_mode_label: launchState?.launch_mode_label || 'Unknown',
     launch_backend: launchState?.launch_backend || 'unknown',
     launch_backend_label: launchState?.launch_backend_label || 'Unknown',
@@ -309,6 +309,14 @@ function parseBoolean(value, fieldName) {
     if (['0', 'false', 'no', 'off'].includes(normalized)) return false;
   }
   throw createHttpError(400, `Invalid boolean for "${fieldName}"`);
+}
+
+function parseLaunchMode(value, fieldName = 'launch_mode') {
+  const normalized = normalizeString(value).toLowerCase();
+  if (['gui', 'xvfb', 'chrome_headless', 'external'].includes(normalized)) {
+    return normalized;
+  }
+  throw createHttpError(400, `Invalid value for "${fieldName}"`);
 }
 
 function parsePort(value, fieldName, { allowNull = false } = {}) {
@@ -358,8 +366,16 @@ function validateInstancePayload(payload, { partial = false } = {}) {
     result.forward_port = parsePort(payload.forward_port, 'forward_port', { allowNull: true });
   }
 
-  if (!partial || Object.prototype.hasOwnProperty.call(payload, 'use_xvfb')) {
-    result.use_xvfb = parseBoolean(payload.use_xvfb ?? false, 'use_xvfb');
+  const hasLaunchMode = Object.prototype.hasOwnProperty.call(payload, 'launch_mode');
+  const hasLegacyUseXvfb = Object.prototype.hasOwnProperty.call(payload, 'use_xvfb');
+  if (!partial || hasLaunchMode || hasLegacyUseXvfb) {
+    if (hasLaunchMode) {
+      result.launch_mode = parseLaunchMode(payload.launch_mode);
+    } else if (hasLegacyUseXvfb) {
+      result.launch_mode = parseBoolean(payload.use_xvfb ?? false, 'use_xvfb') ? 'xvfb' : 'chrome_headless';
+    } else {
+      result.launch_mode = 'chrome_headless';
+    }
   }
 
   if (!partial || Object.prototype.hasOwnProperty.call(payload, 'use_socat')) {
@@ -383,6 +399,7 @@ function applyInstanceDefaults(instance) {
   const next = { ...instance };
 
   if (next.type === 'external') {
+    next.launch_mode = 'external';
     next.use_xvfb = false;
     next.use_socat = false;
     next.forward_port = null;
@@ -390,14 +407,20 @@ function applyInstanceDefaults(instance) {
     return next;
   }
 
+  if (typeof next.launch_mode === 'undefined' || next.launch_mode === null || next.launch_mode === '') {
+    next.launch_mode = next.use_xvfb ? 'xvfb' : 'chrome_headless';
+  }
+
+  if (!['gui', 'xvfb', 'chrome_headless'].includes(String(next.launch_mode).toLowerCase())) {
+    throw createHttpError(400, 'Local instance launch_mode must be "gui", "xvfb", or "chrome_headless"');
+  }
+  next.launch_mode = String(next.launch_mode).toLowerCase();
+  next.use_xvfb = next.launch_mode === 'xvfb';
+
   if (!next.use_socat) {
     next.forward_port = null;
   } else if (!next.forward_port) {
     next.forward_port = Number(next.port) + 1;
-  }
-
-  if (typeof next.use_xvfb === 'undefined') {
-    next.use_xvfb = false;
   }
 
   if (typeof next.use_socat === 'undefined') {
@@ -523,14 +546,15 @@ async function handleCreateInstance(req, res) {
   ensureInstanceUniqueness(payload);
 
   const info = db.prepare(`
-    INSERT INTO instances (name, type, host, port, forward_port, use_xvfb, use_socat, profile_dir, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO instances (name, type, host, port, forward_port, launch_mode, use_xvfb, use_socat, profile_dir, notes)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     payload.name,
     payload.type,
     payload.host,
     payload.port,
     payload.forward_port,
+    payload.launch_mode,
     payload.use_xvfb ? 1 : 0,
     payload.use_socat ? 1 : 0,
     payload.profile_dir,
@@ -557,6 +581,14 @@ async function handleUpdateInstance(req, res) {
   ensureInstanceUniqueness(next, current.id);
 
   const normalizedUpdates = { ...updates };
+  if (
+    Object.prototype.hasOwnProperty.call(normalizedUpdates, 'launch_mode') ||
+    Object.prototype.hasOwnProperty.call(updates, 'use_xvfb') ||
+    Object.prototype.hasOwnProperty.call(normalizedUpdates, 'type')
+  ) {
+    normalizedUpdates.launch_mode = next.launch_mode;
+    normalizedUpdates.use_xvfb = next.use_xvfb;
+  }
   const clientTouchedForwardPort = Object.prototype.hasOwnProperty.call(normalizedUpdates, 'forward_port');
   const currentAutoForward = current.forward_port === null || current.forward_port === current.port + 1;
 

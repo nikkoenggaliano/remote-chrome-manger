@@ -29,12 +29,14 @@ const addInstanceForm = document.getElementById('addInstanceForm');
 const instanceType = document.getElementById('instanceType');
 const localOptionsInputs = document.getElementById('localOptionsInputs');
 const localOptionsCheckboxes = document.getElementById('localOptionsCheckboxes');
-const useXvfb = document.getElementById('use_xvfb');
+const launchMode = document.getElementById('launchMode');
 const useSocat = document.getElementById('use_socat');
 const inputDebugPort = document.getElementById('inputDebugPort');
 const inputForwardPort = document.getElementById('inputForwardPort');
 const editInstanceForm = document.getElementById('editInstanceForm');
 const editInstanceName = document.getElementById('editInstanceName');
+const editLaunchModeGroup = document.getElementById('editLaunchModeGroup');
+const editLaunchMode = document.getElementById('editLaunchMode');
 const editInstanceNotes = document.getElementById('editInstanceNotes');
 const editInstanceModal = new bootstrap.Modal(document.getElementById('editInstanceModal'));
 const importCookiesModalEl = document.getElementById('importCookiesModal');
@@ -125,7 +127,7 @@ addInstanceModalEl.addEventListener('show.bs.modal', () => {
     
     // Default checkboxes
     instanceType.value = 'local';
-    useXvfb.checked = true;
+    launchMode.value = 'xvfb';
     useSocat.checked = true;
     syncInstanceTypeOptions();
 });
@@ -268,6 +270,7 @@ function renderInstances(instances) {
 
 function renderLaunchFlags(inst) {
     return [
+        getLaunchFlagBadge('GUI', inst.launch_mode === 'gui', inst.launch_mode === 'gui' ? 'warning text-dark' : 'secondary'),
         getLaunchFlagBadge('HEADLESS', Boolean(inst.headless_enabled), inst.headless_enabled ? 'success' : 'secondary'),
         getLaunchFlagBadge('XVFB', Boolean(inst.xvfb_enabled), inst.xvfb_enabled ? 'primary' : 'secondary')
     ].join('');
@@ -321,6 +324,9 @@ function openEditInstance(id) {
     }
     currentEditInstanceId = id;
     editInstanceName.value = inst.name || '';
+    editLaunchMode.value = inst.launch_mode && inst.launch_mode !== 'external' ? inst.launch_mode : 'chrome_headless';
+    editLaunchModeGroup.style.display = inst.type === 'local' ? 'block' : 'none';
+    editLaunchMode.disabled = inst.type !== 'local';
     editInstanceNotes.value = inst.notes || '';
     editInstanceModal.show();
 }
@@ -348,6 +354,10 @@ editInstanceForm.addEventListener('submit', async (e) => {
         name: editInstanceName.value.trim(),
         notes: editInstanceNotes.value.trim()
     };
+    const inst = allInstances.find(item => item.id === currentEditInstanceId);
+    if (inst?.type === 'local') {
+        payload.launch_mode = editLaunchMode.value;
+    }
 
     const res = await fetch(`/api/instances/${currentEditInstanceId}`, {
         method: 'PUT',
@@ -417,7 +427,6 @@ addInstanceForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     const formData = new FormData(addInstanceForm);
     const data = Object.fromEntries(formData.entries());
-    data.use_xvfb = formData.get('use_xvfb') === 'on';
     data.use_socat = formData.get('use_socat') === 'on';
         const res = await fetch('/api/instances', {
             method: 'POST',
@@ -428,6 +437,7 @@ addInstanceForm.addEventListener('submit', async (e) => {
         if (res.ok) {
             bootstrap.Modal.getInstance(document.getElementById('addInstanceModal')).hide();
             addInstanceForm.reset();
+            launchMode.value = 'xvfb';
             syncInstanceTypeOptions();
         } else {
             const err = await res.json();
@@ -447,7 +457,7 @@ function syncInstanceTypeOptions() {
     localOptionsInputs.querySelectorAll('input, textarea, select').forEach((el) => {
         el.disabled = !isLocal;
     });
-    localOptionsCheckboxes.querySelectorAll('input').forEach((el) => {
+    localOptionsCheckboxes.querySelectorAll('input, textarea, select').forEach((el) => {
         el.disabled = !isLocal;
     });
 }
