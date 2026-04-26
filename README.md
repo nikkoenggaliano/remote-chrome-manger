@@ -126,22 +126,18 @@ If you want the script to try installing dependencies that can be installed auto
 
 ## Running the Application
 
-Standard foreground mode:
+Configuration is managed via a `.env` file. To get started, copy the example configuration:
 
 ```bash
-./run.sh USERNAME=admin PASSWORD=admin PORT=3000
+cp .env.example .env
 ```
 
-Background mode through `screen`:
+Edit the `.env` file to set your credentials (`NIKKO_CHROME_USERNAME`, `NIKKO_CHROME_PASSWORD`), `PORT`, `REST_API` options, and background daemon settings (`RUN_IN_SCREEN`). You can also configure `POP_UP_REAL_BROWSER=true` to force a GUI launch instead of headless mode.
+
+Once configured, simply run the launcher:
 
 ```bash
-./run.sh USERNAME=admin PASSWORD=admin PORT=3000 RUN_IN_SCREEN=true
-```
-
-REST API enabled:
-
-```bash
-./run.sh USERNAME=admin PASSWORD=admin PORT=3000 REST_API=true REST_API_KEY=super-secret-key
+./run.sh
 ```
 
 Notes:
@@ -152,7 +148,7 @@ Notes:
   - `chrome_headless`
 - `GUI` mode needs a real desktop display on Linux.
 - `Headless via Xvfb` requires `Xvfb` and does not silently fall back to another mode.
-- `run.sh` defaults `CHROME_MANAGER_FORCE_HEADLESS=0` and `CHROME_MANAGER_ENABLE_WEBGL=1`.
+- `run.sh` enables `CHROME_MANAGER_ENABLE_WEBGL=1` by default.
 - If `REST_API=true` and `REST_API_KEY` is empty, the launcher aborts.
 
 ## Authentication

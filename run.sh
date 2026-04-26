@@ -5,14 +5,15 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-# Defaults
-NIKKO_CHROME_USERNAME=""
-NIKKO_CHROME_PASSWORD=""
-RUN_IN_SCREEN="false"
-SESSION_NAME="chrome-fleet"
-REST_API="false"
-REST_API_KEY=""
-AUTO_INSTALL="false"
+if [ ! -f "$SCRIPT_DIR/.env" ]; then
+  echo -e "\033[0;31mError: .env file not found.\033[0m"
+  echo "Please copy .env.example to .env and configure it before running."
+  exit 1
+fi
+
+set -a
+source "$SCRIPT_DIR/.env"
+set +a
 
 # Color codes
 RED='\033[0;31m'
@@ -66,14 +67,6 @@ resolve_node_bin() {
   return 1
 }
 
-# Helper: Parse arguments (format KEY=VALUE)
-for ARGUMENT in "$@"; do
-  KEY=$(echo "$ARGUMENT" | cut -f1 -d=)
-  KEY_LENGTH=${#KEY}
-  VALUE="${ARGUMENT:$KEY_LENGTH+1}"
-  export "$KEY"="$VALUE"
-done
-
 RUN_IN_SCREEN=$(normalize_bool "${RUN_IN_SCREEN:-false}")
 REST_API=$(normalize_bool "${REST_API:-false}")
 AUTO_INSTALL=$(normalize_bool "${AUTO_INSTALL:-false}")
@@ -83,35 +76,20 @@ if [ -z "${PORT:-}" ]; then
   PORT=3000
 fi
 
-# Chrome manager runtime defaults (can be overridden via args)
-# Per-instance launch_mode is authoritative for local spawns.
-if [ -z "${CHROME_MANAGER_FORCE_HEADLESS:-}" ]; then
-  CHROME_MANAGER_FORCE_HEADLESS=0
-fi
 if [ -z "${CHROME_MANAGER_ENABLE_WEBGL:-}" ]; then
-  CHROME_MANAGER_ENABLE_WEBGL=1
+  export CHROME_MANAGER_ENABLE_WEBGL=1
 fi
 
 # Check Auth
-if [ -z "${USERNAME:-}" ] || [ -z "${PASSWORD:-}" ]; then
-  echo -e "${RED}Error: USERNAME and PASSWORD are required.${NC}"
-  echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret [PORT=3000] [RUN_IN_SCREEN=true] [REST_API=true] [REST_API_KEY=secret] [AUTO_INSTALL=true] [CHROME_MANAGER_FORCE_HEADLESS=0] [CHROME_MANAGER_ENABLE_WEBGL=1]"
+if [ -z "${NIKKO_CHROME_USERNAME:-}" ] || [ -z "${NIKKO_CHROME_PASSWORD:-}" ]; then
+  echo -e "${RED}Error: NIKKO_CHROME_USERNAME and NIKKO_CHROME_PASSWORD are required in .env.${NC}"
   exit 1
 fi
 
 if [ "$REST_API" = "true" ] && [ -z "${REST_API_KEY:-}" ]; then
-  echo -e "${RED}Error: REST_API=true requires REST_API_KEY.${NC}"
-  echo "Usage: ./run.sh USERNAME=admin PASSWORD=secret REST_API=true REST_API_KEY=super-secret"
+  echo -e "${RED}Error: REST_API=true requires REST_API_KEY in .env.${NC}"
   exit 1
 fi
-
-export NIKKO_CHROME_USERNAME="$USERNAME"
-export NIKKO_CHROME_PASSWORD="$PASSWORD"
-export PORT="$PORT"
-export REST_API="$REST_API"
-export REST_API_KEY="${REST_API_KEY:-}"
-export CHROME_MANAGER_FORCE_HEADLESS="$CHROME_MANAGER_FORCE_HEADLESS"
-export CHROME_MANAGER_ENABLE_WEBGL="$CHROME_MANAGER_ENABLE_WEBGL"
 
 NODE_BIN_RESOLVED="$(resolve_node_bin)" || {
   echo -e "${RED}Error: working Node.js binary not found.${NC}"
@@ -124,7 +102,7 @@ echo "User: $NIKKO_CHROME_USERNAME"
 echo "Port: $PORT"
 echo "REST_API: $REST_API"
 echo "Node: $NODE_BIN"
-echo "CHROME_MANAGER_FORCE_HEADLESS (legacy env): $CHROME_MANAGER_FORCE_HEADLESS"
+echo "POP_UP_REAL_BROWSER: ${POP_UP_REAL_BROWSER:-false}"
 echo "CHROME_MANAGER_ENABLE_WEBGL: $CHROME_MANAGER_ENABLE_WEBGL"
 
 if [ -x "$SCRIPT_DIR/prep.sh" ]; then
@@ -152,7 +130,7 @@ if [ "$RUN_IN_SCREEN" = "true" ]; then
   fi
 
   echo "Starting server in screen session '$SESSION_NAME'..."
-  SCREEN_COMMAND="cd $(shell_escape "$SCRIPT_DIR"); export PATH=$(shell_escape "$PATH"); export NIKKO_CHROME_USERNAME=$(shell_escape "$USERNAME"); export NIKKO_CHROME_PASSWORD=$(shell_escape "$PASSWORD"); export PORT=$(shell_escape "$PORT"); export REST_API=$(shell_escape "$REST_API"); export REST_API_KEY=$(shell_escape "${REST_API_KEY:-}"); export CHROME_MANAGER_FORCE_HEADLESS=$(shell_escape "$CHROME_MANAGER_FORCE_HEADLESS"); export CHROME_MANAGER_ENABLE_WEBGL=$(shell_escape "$CHROME_MANAGER_ENABLE_WEBGL"); export NODE_BIN=$(shell_escape "$NODE_BIN"); $(shell_escape "$NODE_BIN") server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
+  SCREEN_COMMAND="cd $(shell_escape "$SCRIPT_DIR"); export PATH=$(shell_escape "$PATH"); export NODE_BIN=$(shell_escape "$NODE_BIN"); $(shell_escape "$NODE_BIN") server.js; echo 'Server stopped. Press any key to exit screen.'; read -n 1"
 
   screen -dmS "$SESSION_NAME" bash -lc "$SCREEN_COMMAND"
 

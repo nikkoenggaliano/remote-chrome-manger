@@ -4,6 +4,15 @@ const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+
+const envPath = path.join(__dirname, '.env');
+if (!fs.existsSync(envPath)) {
+  console.error('\x1b[31m%s\x1b[0m', 'ERROR: .env file not found!');
+  console.error('Please copy .env.example to .env and configure it before running the server.');
+  process.exit(1);
+}
+require('dotenv').config({ path: envPath });
+
 const { execSync } = require('child_process');
 const basicAuth = require('express-basic-auth');
 const db = require('./lib/db');
