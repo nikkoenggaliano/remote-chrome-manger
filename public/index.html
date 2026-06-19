@@ -57,6 +57,18 @@
                 
                 <!-- VIEW: DASHBOARD -->
                 <div id="view-dashboard" class="view-section">
+                    <!-- Toolbar -->
+                    <div class="d-flex flex-wrap gap-2 align-items-center mb-4">
+                        <div class="input-group input-group-sm" style="max-width: 320px;">
+                            <span class="input-group-text bg-theme-surface border-theme"><i class="bi bi-search"></i></span>
+                            <input type="text" id="instanceSearch" class="form-control form-control-theme" placeholder="Search instances...">
+                        </div>
+                        <div class="d-flex gap-2 ms-auto">
+                            <span class="badge bg-theme-surface text-theme-muted border border-theme align-self-center" id="fleetSummary"></span>
+                            <button class="btn btn-sm btn-success" id="btnStartAll"><i class="bi bi-play-fill"></i> Start All</button>
+                            <button class="btn btn-sm btn-danger" id="btnStopAll"><i class="bi bi-stop-fill"></i> Stop All</button>
+                        </div>
+                    </div>
                     <!-- Grid View -->
                     <div id="instances-list" class="row row-cols-1 row-cols-md-2 row-cols-xl-3 g-4"></div>
                     
@@ -70,6 +82,7 @@
                                             <th>Status</th>
                                             <th>Name</th>
                                             <th>Type</th>
+                                            <th>Activity</th>
                                             <th>Mode</th>
                                             <th>Host:Port</th>
                                             <th>Forward</th>
@@ -85,9 +98,17 @@
 
                 <!-- VIEW: MY SERVER -->
                 <div id="view-server" class="view-section d-none">
-                    <div class="row g-4">
-                        <!-- Stats Cards -->
-                        <div class="col-md-3">
+                    <!-- System info bar -->
+                    <div class="d-flex flex-wrap gap-3 align-items-center mb-3 text-theme-muted small">
+                        <span title="Hostname"><i class="bi bi-hdd-network me-1"></i><span id="sys-host">—</span></span>
+                        <span title="Platform"><i class="bi bi-pc-display me-1"></i><span id="sys-platform">—</span></span>
+                        <span title="Processor"><i class="bi bi-cpu me-1"></i><span id="sys-cpu">—</span></span>
+                        <span class="ms-auto"><i class="bi bi-arrow-repeat me-1"></i>Auto-refresh every 3s</span>
+                    </div>
+
+                    <!-- Stat Cards -->
+                    <div class="row row-cols-2 row-cols-md-3 row-cols-xl-5 g-3 mb-4">
+                        <div class="col">
                             <div class="card card-theme h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
@@ -99,11 +120,14 @@
                                             <i class="bi bi-cpu text-primary fs-4"></i>
                                         </div>
                                     </div>
+                                    <div class="progress mb-2" style="height: 6px;">
+                                        <div id="stats-cpu-bar" class="progress-bar bg-primary" role="progressbar" style="width: 0%"></div>
+                                    </div>
                                     <small class="text-theme-muted text-truncate d-block" id="stats-cpu-model">Loading...</small>
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col">
                             <div class="card card-theme h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
@@ -122,7 +146,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col">
                             <div class="card card-theme h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
@@ -141,7 +165,7 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="col-md-3">
+                        <div class="col">
                             <div class="card card-theme h-100">
                                 <div class="card-body">
                                     <div class="d-flex justify-content-between align-items-start mb-3">
@@ -157,8 +181,46 @@
                                 </div>
                             </div>
                         </div>
+                        <div class="col">
+                            <div class="card card-theme h-100">
+                                <div class="card-body">
+                                    <div class="d-flex justify-content-between align-items-start mb-3">
+                                        <div>
+                                            <h6 class="text-theme-muted text-uppercase small fw-bold">Instances</h6>
+                                            <h3 class="mb-0 fw-bold" id="stats-instances">0/0</h3>
+                                        </div>
+                                        <div class="p-2 bg-theme-surface rounded-circle">
+                                            <i class="bi bi-browser-chrome text-danger fs-4"></i>
+                                        </div>
+                                    </div>
+                                    <small class="text-theme-muted"><i class="bi bi-window-stack me-1"></i><span id="stats-total-tabs">0</span> open tabs</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
 
-                        <!-- Logs & Network -->
+                    <!-- Fleet Status -->
+                    <div class="card card-theme mb-4">
+                        <div class="card-header py-3 d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0 fw-bold"><i class="bi bi-diagram-3 me-2"></i>Fleet Status</h6>
+                            <span class="badge bg-theme-surface text-theme-muted border border-theme" id="fleet-status-summary"></span>
+                        </div>
+                        <div class="card-body p-0">
+                            <div class="table-responsive">
+                                <table class="table table-theme mb-0 align-middle">
+                                    <thead>
+                                        <tr>
+                                            <th>Status</th><th>Name</th><th>Type</th><th>Host:Port</th><th>Mode</th><th>Uptime</th><th>Tabs</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="fleet-status-body"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Logs & Network -->
+                    <div class="row g-4">
                         <div class="col-md-8">
                              <div class="card card-theme h-100">
                                 <div class="card-header d-flex justify-content-between align-items-center py-3">
@@ -175,7 +237,7 @@
                         <div class="col-md-4">
                             <div class="card card-theme h-100">
                                 <div class="card-header py-3">
-                                    <h6 class="mb-0 fw-bold">Network Interfaces</h6>
+                                    <h6 class="mb-0 fw-bold"><i class="bi bi-ethernet me-2"></i>Network Interfaces</h6>
                                 </div>
                                 <div class="card-body p-0">
                                     <div class="table-responsive">
@@ -396,8 +458,20 @@
             <div class="modal-content modal-content-theme">
                 <div class="modal-header modal-header-theme py-2">
                     <h5 class="modal-title fs-6 fw-bold" id="controlModalTitle">Control Instance</h5>
-                    <div class="d-flex gap-2">
-                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshScreenshot()"><i class="bi bi-arrow-clockwise"></i></button>
+                    <div class="d-flex gap-2 align-items-center">
+                         <div class="btn-group btn-group-sm" role="group">
+                            <button type="button" class="btn btn-success active" id="btnLiveToggle" title="Toggle live streaming">
+                                <i class="bi bi-broadcast"></i> <span id="liveToggleLabel">Live</span>
+                            </button>
+                            <select id="liveFps" class="form-select form-select-sm form-select-theme" style="max-width: 90px;" title="Refresh rate">
+                                <option value="2000">0.5 fps</option>
+                                <option value="1000">1 fps</option>
+                                <option value="500" selected>2 fps</option>
+                                <option value="250">4 fps</option>
+                                <option value="100">10 fps</option>
+                            </select>
+                         </div>
+                         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshScreenshot()" title="Refresh once"><i class="bi bi-arrow-clockwise"></i></button>
                          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
                 </div>
@@ -427,9 +501,20 @@
         </div>
                                 
                                 <!-- Screen -->
-                                <div id="screenWrapper" class="flex-grow-1 bg-black d-flex align-items-start justify-content-center overflow-auto position-relative" style="background-color: #000;">
+                                <div id="screenWrapper" tabindex="0" class="flex-grow-1 bg-black d-flex align-items-start justify-content-center overflow-auto position-relative" style="background-color: #000; outline: none;">
                                     <img id="tabScreenshot" class="img-fluid" src="" style="width: 100%; height: auto; cursor: crosshair; display: block;" draggable="false">
                                     <div id="screenshotLoading" class="spinner-border text-primary position-absolute top-50 start-50" role="status" style="display: none; z-index: 100;"></div>
+                                    <div id="focusHint" class="control-focus-hint position-absolute top-0 start-0 m-2 px-2 py-1 rounded small">
+                                        <i class="bi bi-keyboard"></i> Click the page, then type to send keystrokes
+                                    </div>
+                                </div>
+                                <!-- Status bar -->
+                                <div class="px-2 py-1 border-top border-theme bg-theme-surface d-flex justify-content-between align-items-center" style="font-size: 0.72rem;">
+                                    <span class="text-theme-muted d-flex align-items-center gap-2">
+                                        <span id="streamStatusDot" class="status-indicator status-stopped"></span>
+                                        <span id="streamStatusText">Idle</span>
+                                    </span>
+                                    <span class="text-theme-muted font-monospace" id="streamLatency">—</span>
                                 </div>
                             </div>
 

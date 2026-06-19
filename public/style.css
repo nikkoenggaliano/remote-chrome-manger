@@ -249,6 +249,50 @@ body {
 /* Interactive */
 .cursor-pointer { cursor: pointer; }
 
+/* Small helper text size */
+.x-small { font-size: 0.7rem; }
+
+/* Instance meta chips (uptime / tab count) */
+.meta-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background-color: var(--bg-hover);
+    color: var(--text-muted);
+}
+.meta-chip i { font-size: 0.8rem; }
+
+/* Control modal: keyboard focus hint overlay */
+.control-focus-hint {
+    background: rgba(13, 110, 253, 0.85);
+    color: #fff;
+    z-index: 50;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+#screenWrapper:focus-within .control-focus-hint,
+#screenWrapper.has-focus .control-focus-hint {
+    opacity: 0;
+}
+#screenWrapper.has-focus {
+    box-shadow: inset 0 0 0 2px var(--accent-color);
+}
+
+/* Live streaming status dot pulse */
+.status-indicator.streaming {
+    background-color: #28a745;
+    animation: pulse-dot 1.2s infinite;
+}
+@keyframes pulse-dot {
+    0%   { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0.6); }
+    70%  { box-shadow: 0 0 0 6px rgba(40, 167, 69, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(40, 167, 69, 0); }
+}
+
 /* Terminal/Log Box */
 .terminal-box {
     background-color: var(--terminal-bg);

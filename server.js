@@ -48,14 +48,14 @@ function isTruthy(value) {
 }
 
 // --- Auth Check ---
-const USERNAME = process.env.NIKKO_CHROME_USERNAME;
-const PASSWORD = process.env.NIKKO_CHROME_PASSWORD;
+const USERNAME = process.env.CHROME_FLEET_USERNAME;
+const PASSWORD = process.env.CHROME_FLEET_PASSWORD;
 const REST_API_ENABLED = isTruthy(process.env.REST_API);
 const REST_API_KEY = process.env.REST_API_KEY || '';
 
 if (!USERNAME || !PASSWORD) {
   originalError('\x1b[31m%s\x1b[0m', 'ERROR: Authentication credentials missing!');
-  originalError('Please set NIKKO_CHROME_USERNAME and NIKKO_CHROME_PASSWORD environment variables.');
+  originalError('Please set CHROME_FLEET_USERNAME and CHROME_FLEET_PASSWORD environment variables.');
   process.exit(1);
 }
 
@@ -209,8 +209,10 @@ function getServerStatsPayload() {
   const usedMemory = mem.total - mem.free;
 
   return {
+    hostname: os.hostname(),
     platform: os.platform(),
     release: os.release(),
+    arch: os.arch(),
     uptime: os.uptime(),
     loadavg: os.loadavg(),
     totalmem: mem.total,
@@ -264,11 +266,37 @@ function buildForwardTargets(instance, interfaces) {
   }));
 }
 
+// Live tab counts per running instance, refreshed by the periodic sync loop.
+const instanceTabCounts = new Map();
+
+async function refreshTabCounts(instances) {
+  const runningIds = new Set();
+  await Promise.all(instances.map(async (instance) => {
+    if (instance.status !== 'running') return;
+    runningIds.add(instance.id);
+    try {
+      const tabs = await cdpClient.getTabs(instance.host, instance.port);
+      const count = Array.isArray(tabs)
+        ? tabs.filter((tab) => tab.type === 'page' || tab.type === undefined).length
+        : null;
+      instanceTabCounts.set(instance.id, count);
+    } catch {
+      instanceTabCounts.set(instance.id, null);
+    }
+  }));
+
+  // Forget counts for instances that are no longer running.
+  for (const id of instanceTabCounts.keys()) {
+    if (!runningIds.has(id)) instanceTabCounts.delete(id);
+  }
+}
+
 function serializeInstance(instance, interfaces = getNetworkInterfaces()) {
   const forwardTargets = buildForwardTargets(instance, interfaces);
   const launchState = chromeManager.getInstanceLaunchState(instance);
   return {
     ...instance,
+    tab_count: instanceTabCounts.has(instance.id) ? instanceTabCounts.get(instance.id) : null,
     use_xvfb: launchState?.launch_mode === 'xvfb',
     use_socat: Boolean(instance.use_socat),
     headless_stack_enabled: Boolean(launchState?.headless_stack_enabled),
@@ -495,6 +523,7 @@ chromeManager.resetStatuses();
 // Periodic Sync (Every 10s)
 setInterval(async () => {
   await chromeManager.syncStatuses();
+  await refreshTabCounts(chromeManager.getInstances());
   broadcastUpdate();
 }, 10000);
 
@@ -513,6 +542,14 @@ async function handleHealthz(req, res) {
     timestamp: new Date().toISOString(),
     server: getServerStatsPayload(),
     instances: getInstanceSummaryCounts(),
+  });
+}
+
+async function handleGetCapabilities(req, res) {
+  const platform = os.platform();
+  res.json({
+    platform,
+    xvfb_supported: !['darwin', 'win32'].includes(platform),
   });
 }
 
@@ -643,6 +680,7 @@ async function handleStartInstance(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
   await chromeManager.spawnInstance(instance.id);
   const refreshed = getInstanceByIdOrThrow(instance.id);
+  await refreshTabCounts([refreshed]);
   broadcastUpdate();
   res.json({ success: true, instance: serializeInstance(refreshed) });
 }
@@ -650,6 +688,7 @@ async function handleStartInstance(req, res) {
 async function handleStopInstance(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
   chromeManager.stopInstance(instance.id);
+  instanceTabCounts.delete(instance.id);
   const refreshed = getInstanceByIdOrThrow(instance.id);
   broadcastUpdate();
   res.json({ success: true, instance: serializeInstance(refreshed) });
@@ -690,7 +729,15 @@ async function handleNewTab(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
   const url = normalizeString(req.body?.url) || 'about:blank';
   const tab = await cdpClient.newTab(instance.host, instance.port, url);
+  await refreshTabCounts([instance]);
+  broadcastUpdate();
   res.json(tab);
+}
+
+async function handleActivateTab(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  await cdpClient.bringToFront(instance.host, instance.port, req.params.tabId);
+  res.json({ success: true });
 }
 
 async function handleNavigateTab(req, res) {
@@ -705,6 +752,8 @@ async function handleNavigateTab(req, res) {
 async function handleDeleteTab(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
   await cdpClient.closeTab(instance.host, instance.port, req.params.tabId);
+  await refreshTabCounts([instance]);
+  broadcastUpdate();
   res.json({ success: true });
 }
 
@@ -730,8 +779,10 @@ async function handleInput(req, res) {
     await cdpClient.sendInput(instance.host, instance.port, req.params.tabId, 'Input.dispatchMouseEvent', params);
   } else if (type === 'key') {
     await cdpClient.sendInput(instance.host, instance.port, req.params.tabId, 'Input.dispatchKeyEvent', params);
+  } else if (type === 'text') {
+    await cdpClient.sendInput(instance.host, instance.port, req.params.tabId, 'Input.insertText', params);
   } else {
-    throw createHttpError(400, 'Input type must be "mouse" or "key"');
+    throw createHttpError(400, 'Input type must be "mouse", "key", or "text"');
   }
 
   res.json({ success: true });
@@ -776,6 +827,7 @@ function registerRoutes(router) {
   router.get('/server/healthz', withErrorBoundary(handleHealthz));
   router.get('/server/healtz', withErrorBoundary(handleHealthz));
 
+  router.get('/capabilities', withErrorBoundary(handleGetCapabilities));
   router.get('/config', withErrorBoundary(handleGetConfig));
   router.post('/config', withErrorBoundary(handleSetConfig));
   router.delete('/config/:key', withErrorBoundary(handleDeleteConfig));
@@ -793,6 +845,7 @@ function registerRoutes(router) {
 
   router.get('/instances/:id/tabs', withErrorBoundary(handleGetTabs));
   router.post('/instances/:id/tabs/new', withErrorBoundary(handleNewTab));
+  router.post('/instances/:id/tabs/:tabId/activate', withErrorBoundary(handleActivateTab));
   router.post('/instances/:id/tabs/:tabId/navigate', withErrorBoundary(handleNavigateTab));
   router.delete('/instances/:id/tabs/:tabId', withErrorBoundary(handleDeleteTab));
   router.get('/instances/:id/tabs/:tabId/screenshot', withErrorBoundary(handleScreenshot));

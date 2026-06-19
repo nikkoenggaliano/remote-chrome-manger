@@ -6,14 +6,20 @@ Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium ins
 
 - Create, edit, and delete local or external browser instances
 - Start, stop, and inspect instances from the web UI
+- Per-instance cards show live **uptime** (how long it has been running) and **open tab count**
+- Bulk **Start All / Stop All** and instant instance **search/filter**
 - Keep separate browser profiles per instance
 - Port forwarding through `socat`
 - Per-instance launch mode selector with `GUI`, `Headless via Xvfb`, and `Native Chrome Headless`
+- Smooth, low-latency **live tab control**: continuous flicker-free streaming, adjustable
+  frame rate, full mouse (click, drag, scroll, right-click) and **keyboard** input (typing,
+  special keys, and Ctrl/Cmd shortcuts)
+- Persistent CDP connections per tab keep interactive control fast
 - Import cookies into a running browser instance through CDP from Netscape or JSON exports
 - Server dashboard for CPU, memory, disk, uptime, and network interfaces
 - Basic Auth for the UI and legacy `/api/*` endpoints
 - Optional API key protected REST API under `/rest/*`
-- `run.sh` enables WebGL-friendly Chrome flags by default
+- `run.sh` auto-creates `.env` from `.env.example` on first launch and enables WebGL-friendly Chrome flags by default
 
 ## Requirements
 
@@ -132,7 +138,9 @@ Configuration is managed via a `.env` file. To get started, copy the example con
 cp .env.example .env
 ```
 
-Edit the `.env` file to set your credentials (`NIKKO_CHROME_USERNAME`, `NIKKO_CHROME_PASSWORD`), `PORT`, `REST_API` options, and background daemon settings (`RUN_IN_SCREEN`). You can also configure `POP_UP_REAL_BROWSER=true` to force a GUI launch instead of headless mode.
+Edit the `.env` file to set your credentials (`CHROME_FLEET_USERNAME`, `CHROME_FLEET_PASSWORD`), `PORT`, `REST_API` options, and background daemon settings (`RUN_IN_SCREEN`). You can also configure `POP_UP_REAL_BROWSER=true` to force a GUI launch instead of headless mode, point `CHROME_BIN` at a specific browser binary, and tune `SCREENSHOT_QUALITY` (10–100) for the live control stream. See `.env.example` for the full, documented list.
+
+If you run `./run.sh` without a `.env`, it copies `.env.example` to `.env` automatically and continues with the defaults (review the credentials before exposing the server).
 
 Once configured, simply run the launcher:
 
@@ -202,6 +210,7 @@ The REST API also exposes the same operational features that exist in the legacy
 - `DELETE /config/:key`
 - `GET /instances/:id/tabs`
 - `POST /instances/:id/tabs/new`
+- `POST /instances/:id/tabs/:tabId/activate`
 - `POST /instances/:id/tabs/:tabId/navigate`
 - `DELETE /instances/:id/tabs/:tabId`
 - `GET /instances/:id/tabs/:tabId/screenshot`

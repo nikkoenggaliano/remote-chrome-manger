@@ -5,21 +5,27 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
-if [ ! -f "$SCRIPT_DIR/.env" ]; then
-  echo -e "\033[0;31mError: .env file not found.\033[0m"
-  echo "Please copy .env.example to .env and configure it before running."
-  exit 1
-fi
-
-set -a
-source "$SCRIPT_DIR/.env"
-set +a
-
 # Color codes
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
+
+# Auto-bootstrap .env from the example so the app can "just run".
+if [ ! -f "$SCRIPT_DIR/.env" ]; then
+  if [ -f "$SCRIPT_DIR/.env.example" ]; then
+    cp "$SCRIPT_DIR/.env.example" "$SCRIPT_DIR/.env"
+    echo -e "${YELLOW}No .env found — created one from .env.example.${NC}"
+    echo -e "${YELLOW}Review $SCRIPT_DIR/.env (especially credentials) before exposing this server.${NC}"
+  else
+    echo -e "${RED}Error: neither .env nor .env.example found.${NC}"
+    exit 1
+  fi
+fi
+
+set -a
+source "$SCRIPT_DIR/.env"
+set +a
 
 normalize_bool() {
   case "${1:-false}" in
@@ -81,8 +87,8 @@ if [ -z "${CHROME_MANAGER_ENABLE_WEBGL:-}" ]; then
 fi
 
 # Check Auth
-if [ -z "${NIKKO_CHROME_USERNAME:-}" ] || [ -z "${NIKKO_CHROME_PASSWORD:-}" ]; then
-  echo -e "${RED}Error: NIKKO_CHROME_USERNAME and NIKKO_CHROME_PASSWORD are required in .env.${NC}"
+if [ -z "${CHROME_FLEET_USERNAME:-}" ] || [ -z "${CHROME_FLEET_PASSWORD:-}" ]; then
+  echo -e "${RED}Error: CHROME_FLEET_USERNAME and CHROME_FLEET_PASSWORD are required in .env.${NC}"
   exit 1
 fi
 
@@ -98,7 +104,7 @@ NODE_BIN_RESOLVED="$(resolve_node_bin)" || {
 export NODE_BIN="$NODE_BIN_RESOLVED"
 
 echo -e "${GREEN}>>> Chrome Fleet Control Launcher <<<${NC}"
-echo "User: $NIKKO_CHROME_USERNAME"
+echo "User: $CHROME_FLEET_USERNAME"
 echo "Port: $PORT"
 echo "REST_API: $REST_API"
 echo "Node: $NODE_BIN"
