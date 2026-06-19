@@ -266,14 +266,17 @@ function buildForwardTargets(instance, interfaces) {
   }));
 }
 
-// Live tab counts per running instance, refreshed by the periodic sync loop.
+// Live tab counts + memory usage per running instance, refreshed by the
+// periodic sync loop.
 const instanceTabCounts = new Map();
+const instanceMemoryBytes = new Map();
 
 async function refreshTabCounts(instances) {
   const runningIds = new Set();
   await Promise.all(instances.map(async (instance) => {
     if (instance.status !== 'running') return;
     runningIds.add(instance.id);
+    instanceMemoryBytes.set(instance.id, chromeManager.getInstanceMemoryBytes(instance));
     try {
       const tabs = await cdpClient.getTabs(instance.host, instance.port);
       const count = Array.isArray(tabs)
@@ -289,6 +292,9 @@ async function refreshTabCounts(instances) {
   for (const id of instanceTabCounts.keys()) {
     if (!runningIds.has(id)) instanceTabCounts.delete(id);
   }
+  for (const id of instanceMemoryBytes.keys()) {
+    if (!runningIds.has(id)) instanceMemoryBytes.delete(id);
+  }
 }
 
 function serializeInstance(instance, interfaces = getNetworkInterfaces()) {
@@ -297,6 +303,7 @@ function serializeInstance(instance, interfaces = getNetworkInterfaces()) {
   return {
     ...instance,
     tab_count: instanceTabCounts.has(instance.id) ? instanceTabCounts.get(instance.id) : null,
+    memory_bytes: instanceMemoryBytes.has(instance.id) ? instanceMemoryBytes.get(instance.id) : null,
     use_xvfb: launchState?.launch_mode === 'xvfb',
     use_socat: Boolean(instance.use_socat),
     headless_stack_enabled: Boolean(launchState?.headless_stack_enabled),

@@ -259,6 +259,20 @@ function renderFleetSummary(instances) {
     fleetSummary.innerText = `${running}/${total} running · ${tabs} tab${tabs === 1 ? '' : 's'}`;
 }
 
+// Human-readable bytes (e.g. 412 MB, 1.3 GB). Returns '—' for non-numbers.
+function formatBytes(bytes) {
+    if (typeof bytes !== 'number' || !isFinite(bytes) || bytes < 0) return '—';
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ['KB', 'MB', 'GB', 'TB'];
+    let value = bytes / 1024;
+    let i = 0;
+    while (value >= 1024 && i < units.length - 1) {
+        value /= 1024;
+        i++;
+    }
+    return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[i]}`;
+}
+
 // My Server page: live fleet overview (stat card + fleet table).
 function renderServerFleet(instances) {
     const running = instances.filter(i => i.status === 'running');
@@ -275,7 +289,7 @@ function renderServerFleet(instances) {
     const body = document.getElementById('fleet-status-body');
     if (!body) return;
     if (!instances.length) {
-        body.innerHTML = '<tr><td colspan="7" class="text-center text-theme-muted py-3">No instances configured.</td></tr>';
+        body.innerHTML = '<tr><td colspan="8" class="text-center text-theme-muted py-3">No instances configured.</td></tr>';
         return;
     }
     body.innerHTML = instances.map(inst => `
@@ -287,6 +301,7 @@ function renderServerFleet(instances) {
             <td class="x-small text-theme-muted">${escapeHtml(inst.launch_backend_label || inst.launch_mode_label || '—')}</td>
             <td class="x-small ${inst.status === 'running' ? 'uptime' : 'text-theme-muted'}" ${inst.status === 'running' && inst.started_at ? `data-started-at="${escapeHtml(inst.started_at)}"` : ''}>${inst.status === 'running' && inst.started_at ? `<i class="bi bi-clock-history"></i> ${formatUptimeFrom(inst.started_at)}` : '—'}</td>
             <td class="x-small">${inst.status === 'running' ? (typeof inst.tab_count === 'number' ? inst.tab_count : '…') : '—'}</td>
+            <td class="x-small">${inst.status === 'running' ? (typeof inst.memory_bytes === 'number' ? formatBytes(inst.memory_bytes) : (inst.type === 'local' ? '…' : '—')) : '—'}</td>
         </tr>
     `).join('');
 }
