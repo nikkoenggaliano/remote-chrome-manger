@@ -42,3 +42,5 @@ venv/
 
 send.sh 
 spawner.sh
+PROMPT
+deploy*

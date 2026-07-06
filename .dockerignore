@@ -1,0 +1,35 @@
+# Keep the build context small and the image free of host state / secrets.
+
+# Dependencies (rebuilt inside the image for the container's arch)
+node_modules/
+
+# VCS / editor
+.git/
+.gitignore
+.gitattributes
+.DS_Store
+
+# Local runtime state — provided at runtime via volumes instead
+profiles/
+data/
+database.sqlite
+database.sqlite-journal
+*.db
+*.sqlite
+*.sqlite-journal
+*.log
+logs/
+
+# Secrets / env — injected at runtime via env_file, never baked into the image
+.env
+
+# The exported image + private helper scripts must never enter the context
+deploy/
+send.sh
+spawner.sh
+PROMPT
+
+# Docker meta (not needed inside the image)
+Dockerfile
+.dockerignore
+docker-compose.yml

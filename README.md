@@ -159,6 +159,51 @@ Notes:
 - `run.sh` enables `CHROME_MANAGER_ENABLE_WEBGL=1` by default.
 - If `REST_API=true` and `REST_API_KEY` is empty, the launcher aborts.
 
+## Docker Deployment
+
+Run everything — the Node dashboard **and** a real browser — in one container.
+The image bundles Google's official **headless-shell Chromium** (multi-arch
+amd64 + arm64) plus every helper the app shells out to (`socat`, `Xvfb`,
+`lsof`), so the only host requirement is Docker.
+
+```bash
+./docker.sh          # build the image and start the dashboard (default action)
+./docker.sh logs     # follow logs
+./docker.sh down     # stop and remove
+./docker.sh help     # all commands
+```
+
+`docker.sh` auto-detects your Docker flavour and works with the `docker compose`
+plugin, the legacy `docker-compose` binary, **or** plain `docker` (no Compose
+needed). It bootstraps `.env` from `.env.example`, creates `./data` for
+persistent profiles + database, and exposes the dashboard on `PORT` (default
+3000). Configuration is the same `.env` used by `run.sh`.
+
+### Offline / air-gapped install
+
+To run on a machine with no internet (or no build toolchain), export the image
+to the `deploy/` folder and copy that folder to the target host:
+
+```bash
+./docker.sh export           # -> deploy/chrome-fleet-control-<arch>.tar.gz
+# copy the whole deploy/ folder to the offline machine, then there:
+cd deploy && ./load.sh       # imports the image and starts the dashboard
+```
+
+`deploy/` is a self-contained bundle (image tarball + `load.sh` +
+`docker-compose.yml` + `.env.example`); see `deploy/README.md`. The tarball is
+architecture-specific — build it on the same CPU architecture as the target
+(`arm64` vs `amd64`).
+
+Full functionality — instance spawning, tab navigation, CDP, cookie import, and
+**live screenshots / live-control** — is verified working in the container on
+both `amd64` (native Linux) and `arm64` (Apple Silicon via colima).
+
+> The CDP client used for live control was switched from `chrome-remote-interface`
+> to a small raw-WebSocket client (`lib/cdp-raw.js`): the former crashes modern
+> Chromium (150+) the moment a screenshot/input session is opened, while a raw
+> WebSocket carrying the identical CDP commands works reliably.
+
 ## Authentication
 
 - The UI and legacy `/api/*` endpoints use Basic Auth with `USERNAME` and `PASSWORD`.

@@ -1,0 +1,45 @@
+# ============================================================================
+# Chrome Fleet Control — Docker Compose (build + run on this host)
+# ----------------------------------------------------------------------------
+# Use ./docker.sh instead of calling compose directly; it auto-detects whether
+# your Docker has the `docker compose` plugin or the legacy `docker-compose`
+# binary (and falls back to plain `docker run` if neither exists).
+# ============================================================================
+
+services:
+  chrome-fleet:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: chrome-fleet-control:latest
+    container_name: chrome-fleet-control
+    restart: unless-stopped
+
+    # App configuration comes from .env (credentials, REST API, PORT, ...).
+    env_file:
+      - .env
+
+    # Container-internal overrides. These win over env_file, guaranteeing the
+    # bundled Chromium is used regardless of any host-specific CHROME_BIN left
+    # in .env, and pinning the in-container listen port to 3000.
+    environment:
+      CHROME_BIN: /headless-shell/headless-shell
+      CHROME_MANAGER_ENABLE_WEBGL: "1"
+      PORT: "3000"
+
+    # Host ${PORT} (from .env, default 3000) -> container 3000.
+    ports:
+      - "${PORT:-3000}:3000"
+
+    # Chromium is happier with a larger /dev/shm. The app also passes
+    # --disable-dev-shm-usage, so this is belt-and-suspenders.
+    shm_size: "2gb"
+
+    # Persist browser profiles (sessions/cookies) and the instance database
+    # across container rebuilds. ./docker.sh creates these before first run.
+    # .env is mounted in because server.js requires the file to physically exist
+    # (the explicit `environment:` values above still take precedence over it).
+    volumes:
+      - ./.env:/app/.env
+      - ./data/profiles:/app/profiles
+      - ./data/database.sqlite:/app/database.sqlite
