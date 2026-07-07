@@ -41,6 +41,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     NODE_ENV=production \
     CHROME_BIN=/headless-shell/headless-shell \
     CHROME_MANAGER_ENABLE_WEBGL=1 \
+    CHROME_MANAGER_IGNORE_CERT_ERRORS=1 \
     PORT=3000
 
 # Helper tools the app shells out to. `socat` already ships in the base image.
