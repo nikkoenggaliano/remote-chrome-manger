@@ -92,9 +92,12 @@ if [ -z "${CHROME_FLEET_USERNAME:-}" ] || [ -z "${CHROME_FLEET_PASSWORD:-}" ]; t
   exit 1
 fi
 
+# Not fatal any more: REST_API/REST_API_KEY only seed the settings on a fresh
+# database, and the real toggle lives in the dashboard (Configuration -> REST
+# API). Refusing to boot here would lock out a server whose REST settings were
+# configured in the UI long ago.
 if [ "$REST_API" = "true" ] && [ -z "${REST_API_KEY:-}" ]; then
-  echo -e "${RED}Error: REST_API=true requires REST_API_KEY in .env.${NC}"
-  exit 1
+  echo -e "${YELLOW}Warning: REST_API=true with no REST_API_KEY. On a fresh database the REST API stays off until you set a key in Configuration -> REST API.${NC}"
 fi
 
 NODE_BIN_RESOLVED="$(resolve_node_bin)" || {
@@ -106,7 +109,7 @@ export NODE_BIN="$NODE_BIN_RESOLVED"
 echo -e "${GREEN}>>> Chrome Fleet Control Launcher <<<${NC}"
 echo "User: $CHROME_FLEET_USERNAME"
 echo "Port: $PORT"
-echo "REST_API: $REST_API"
+echo "REST_API (seed only, live toggle is in the dashboard): $REST_API"
 echo "Node: $NODE_BIN"
 echo "POP_UP_REAL_BROWSER: ${POP_UP_REAL_BROWSER:-false}"
 echo "CHROME_MANAGER_ENABLE_WEBGL: $CHROME_MANAGER_ENABLE_WEBGL"

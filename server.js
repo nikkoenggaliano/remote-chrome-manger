@@ -4,6 +4,7 @@ const { Server } = require('socket.io');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const crypto = require('crypto');
 
 const envPath = path.join(__dirname, '.env');
 if (!fs.existsSync(envPath)) {
@@ -13,13 +14,14 @@ if (!fs.existsSync(envPath)) {
 }
 require('dotenv').config({ path: envPath });
 
-const { execSync } = require('child_process');
+const { execFile } = require('child_process');
 const basicAuth = require('express-basic-auth');
 const db = require('./lib/db');
 const chromeManager = require('./lib/chrome-manager');
 const cdpClient = require('./lib/cdp-client');
 const { parseCookieFiles } = require('./lib/cookie-import');
 const { runChecks } = require('./lib/dep-check');
+const { buildOpenApiSpec, documentedRoutes } = require('./lib/openapi');
 
 // --- Server Log Capture ---
 const serverLogs = [];
@@ -50,18 +52,62 @@ function isTruthy(value) {
 // --- Auth Check ---
 const USERNAME = process.env.CHROME_FLEET_USERNAME;
 const PASSWORD = process.env.CHROME_FLEET_PASSWORD;
-const REST_API_ENABLED = isTruthy(process.env.REST_API);
-const REST_API_KEY = process.env.REST_API_KEY || '';
-
 if (!USERNAME || !PASSWORD) {
   originalError('\x1b[31m%s\x1b[0m', 'ERROR: Authentication credentials missing!');
   originalError('Please set CHROME_FLEET_USERNAME and CHROME_FLEET_PASSWORD environment variables.');
   process.exit(1);
 }
 
-if (REST_API_ENABLED && !REST_API_KEY) {
-  originalError('\x1b[31m%s\x1b[0m', 'ERROR: REST_API=true requires REST_API_KEY.');
-  process.exit(1);
+// --- REST API settings ------------------------------------------------------
+// These live in the config table, not in process.env, so they can be flipped
+// from Configuration -> REST API without editing .env and restarting. REST_API
+// / REST_API_KEY still work, but only to *seed* the rows the first time the
+// server sees a database that has never been configured — after that the UI is
+// the single source of truth, the same way chrome_bin and profiles_dir behave.
+const REST_ENABLED_KEY = 'rest_api_enabled';
+const REST_KEY_KEY = 'rest_api_key';
+// Managed through the dedicated settings endpoint, which validates them; keep
+// them out of the generic key/value config surface so there is only one way in.
+const RESERVED_CONFIG_KEYS = new Set([REST_ENABLED_KEY, REST_KEY_KEY]);
+
+// Prepared once: getRestApiSettings() runs on every /rest request, and
+// better-sqlite3 recompiles the statement on each db.prepare() call.
+const selectConfigValue = db.prepare('SELECT value FROM config WHERE key = ?');
+const upsertConfigValue = db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)');
+
+function readConfigValue(key) {
+  const row = selectConfigValue.get(key);
+  return row ? row.value : null;
+}
+
+function writeConfigValue(key, value) {
+  upsertConfigValue.run(key, String(value));
+}
+
+function seedRestSettingsFromEnv() {
+  if (readConfigValue(REST_ENABLED_KEY) === null) {
+    writeConfigValue(REST_ENABLED_KEY, isTruthy(process.env.REST_API) ? 'true' : 'false');
+  }
+  if (readConfigValue(REST_KEY_KEY) === null) {
+    writeConfigValue(REST_KEY_KEY, process.env.REST_API_KEY || '');
+  }
+}
+seedRestSettingsFromEnv();
+
+function generateApiKey() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+// Read on every request, so a toggle takes effect immediately. An enabled flag
+// with no key is treated as disabled rather than as an open door.
+function getRestApiSettings() {
+  const apiKey = readConfigValue(REST_KEY_KEY) || '';
+  const requested = isTruthy(readConfigValue(REST_ENABLED_KEY));
+  return { requested, api_key: apiKey, enabled: requested && Boolean(apiKey) };
+}
+
+if (isTruthy(process.env.REST_API) && !process.env.REST_API_KEY && !getRestApiSettings().api_key) {
+  console.log('[REST] REST_API=true but no key is set. The REST API stays off until you set a key in Configuration -> REST API.');
 }
 
 const app = express();
@@ -103,10 +149,32 @@ function restCors(req, res, next) {
   next();
 }
 
+// The REST surface only exists while it is switched on. Answering 404 rather
+// than 403 keeps a disabled deployment from advertising that the API is there
+// at all.
+function restEnabledGate(req, res, next) {
+  if (!getRestApiSettings().enabled) {
+    return res.status(404).json({ error: 'REST API is disabled. Enable it in Configuration -> REST API.' });
+  }
+  next();
+}
+
+function secretsMatch(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  // timingSafeEqual throws on length mismatch, and the lengths themselves leak
+  // nothing useful here, so compare them up front.
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
 function restApiAuth(req, res, next) {
+  // Read the key per request instead of closing over a boot-time constant, so
+  // rotating it in the UI takes effect on the very next call.
+  const { api_key: apiKey } = getRestApiSettings();
   const bearerMatch = req.get('authorization')?.match(/^Bearer\s+(.+)$/i);
   const providedApiKey = req.get('x-api-key') || (bearerMatch ? bearerMatch[1] : '');
-  if (!providedApiKey || providedApiKey !== REST_API_KEY) {
+  if (!providedApiKey || !apiKey || !secretsMatch(providedApiKey, apiKey)) {
     return res.status(401).json({ error: 'Invalid or missing REST API key' });
   }
   next();
@@ -125,50 +193,81 @@ function getNetworkInterfaces() {
   return results;
 }
 
+// `df` used to run synchronously inside every /server/stats request, stalling
+// the event loop for ~14 ms while the Server page polled it every 3 seconds.
+// Disk usage barely moves, so it is refreshed in the background and read from
+// a cache: callers stay synchronous, nothing blocks.
+const DISK_REFRESH_MS = 15000;
+let diskUsage = null;
+let diskRefreshing = false;
+let diskRefreshedAt = 0;
+
+function parseDiskOutput(output) {
+  const lines = String(output).trim().split('\n');
+  if (lines.length < 2) return null;
+  const parts = lines[1].replace(/\s+/g, ' ').split(' ');
+  if (parts.length < 6) return null;
+  return {
+    total: parseInt(parts[1], 10) * 1024,
+    used: parseInt(parts[2], 10) * 1024,
+    free: parseInt(parts[3], 10) * 1024,
+    percent: parts[4],
+  };
+}
+
+function refreshDiskUsage() {
+  if (diskRefreshing || Date.now() - diskRefreshedAt < DISK_REFRESH_MS) return;
+  diskRefreshing = true;
+  execFile('df', ['-k', '.'], { cwd: __dirname, timeout: 5000 }, (error, stdout) => {
+    diskRefreshing = false;
+    diskRefreshedAt = Date.now();
+    if (error && !stdout) {
+      console.error('Error getting disk usage:', error.message);
+      return;
+    }
+    diskUsage = parseDiskOutput(stdout) || diskUsage;
+  });
+}
+
 function getDiskUsage() {
-  try {
-    const output = execSync('df -k .').toString();
-    const lines = output.trim().split('\n');
-    if (lines.length < 2) return null;
+  refreshDiskUsage(); // fire-and-forget; this call returns the previous value
+  return diskUsage;
+}
 
-    const parts = lines[1].replace(/\s+/g, ' ').split(' ');
-    if (parts.length < 6) return null;
+// os.freemem() on macOS reports only wired-down free pages and reads far lower
+// than Activity Monitor, so vm_stat is used to add inactive pages back in. It
+// is a shell-out, though, and this runs on every /server/stats call, which the
+// dashboard polls every 3 seconds: same treatment as disk usage, refreshed in
+// the background so nothing blocks the event loop.
+const DARWIN_MEMORY_REFRESH_MS = 3000;
+let darwinFreeMemory = null;
+let darwinMemoryRefreshing = false;
+let darwinMemoryRefreshedAt = 0;
 
-    return {
-      total: parseInt(parts[1], 10) * 1024,
-      used: parseInt(parts[2], 10) * 1024,
-      free: parseInt(parts[3], 10) * 1024,
-      percent: parts[4],
-    };
-  } catch (error) {
-    console.error('Error getting disk usage:', error.message);
-    return null;
-  }
+function refreshDarwinMemory() {
+  if (os.platform() !== 'darwin') return;
+  if (darwinMemoryRefreshing || Date.now() - darwinMemoryRefreshedAt < DARWIN_MEMORY_REFRESH_MS) return;
+  darwinMemoryRefreshing = true;
+  execFile('vm_stat', [], { timeout: 5000 }, (error, stdout) => {
+    darwinMemoryRefreshing = false;
+    darwinMemoryRefreshedAt = Date.now();
+    if (error && !stdout) return;
+
+    const text = String(stdout);
+    const pageSizeMatch = text.match(/page size of (\d+) bytes/);
+    const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;
+    const freePagesMatch = text.match(/Pages free:\s+(\d+)/);
+    const inactivePagesMatch = text.match(/Pages inactive:\s+(\d+)/);
+    if (freePagesMatch && inactivePagesMatch) {
+      darwinFreeMemory = (parseInt(freePagesMatch[1], 10) + parseInt(inactivePagesMatch[1], 10)) * pageSize;
+    }
+  });
 }
 
 function getMemoryStats() {
+  refreshDarwinMemory(); // fire-and-forget; uses the previous reading
   const total = os.totalmem();
-  let free = os.freemem();
-
-  if (os.platform() === 'darwin') {
-    try {
-      const vmStat = execSync('vm_stat').toString();
-      const pageSizeMatch = vmStat.match(/page size of (\d+) bytes/);
-      const pageSize = pageSizeMatch ? parseInt(pageSizeMatch[1], 10) : 4096;
-
-      const freePagesMatch = vmStat.match(/Pages free:\s+(\d+)/);
-      const inactivePagesMatch = vmStat.match(/Pages inactive:\s+(\d+)/);
-
-      if (freePagesMatch && inactivePagesMatch) {
-        const freePages = parseInt(freePagesMatch[1], 10);
-        const inactivePages = parseInt(inactivePagesMatch[1], 10);
-        free = (freePages + inactivePages) * pageSize;
-      }
-    } catch (error) {
-      // Fallback to os.freemem().
-    }
-  }
-
+  const free = darwinFreeMemory !== null ? darwinFreeMemory : os.freemem();
   return { total, free };
 }
 
@@ -230,6 +329,10 @@ function getServerStatsPayload() {
 function buildConfigMap() {
   const config = db.prepare('SELECT * FROM config').all();
   return config.reduce((acc, row) => {
+    // REST settings have their own validated endpoint and their own UI card;
+    // listing them here too would show the API key in plaintext in a table that
+    // also offers an unvalidated edit and a delete button.
+    if (RESERVED_CONFIG_KEYS.has(row.key)) return acc;
     acc[row.key] = row.value;
     return acc;
   }, {});
@@ -343,8 +446,18 @@ function getInstanceSummaryCounts() {
   }, { total: 0, running: 0, starting: 0, stopped: 0 });
 }
 
-function broadcastUpdate() {
-  io.emit('instances_updated', getSerializedInstances());
+// The periodic sync fires every 10 s whether or not anything moved, and each
+// broadcast re-serialises every instance and pushes it to every connected
+// client. Skip the emit when the payload is byte-identical to the last one;
+// `force` is for a client that has just connected and has nothing yet.
+let lastBroadcastPayload = null;
+
+function broadcastUpdate(options = {}) {
+  const instances = getSerializedInstances();
+  const serialized = JSON.stringify(instances);
+  if (!options.force && serialized === lastBroadcastPayload) return;
+  lastBroadcastPayload = serialized;
+  io.emit('instances_updated', instances);
 }
 
 function normalizeString(value) {
@@ -530,6 +643,9 @@ if (!check.ok) {
   process.exit(1);
 }
 
+refreshDiskUsage();
+refreshDarwinMemory();
+
 // Reset Statuses on Boot (Assume all local procs died with previous server)
 console.log('Resetting instance statuses...');
 chromeManager.resetStatuses();
@@ -583,13 +699,80 @@ async function handleSetConfig(req, res) {
     throw createHttpError(400, 'Missing value');
   }
 
+  if (RESERVED_CONFIG_KEYS.has(key)) {
+    throw createHttpError(400, `"${key}" is managed under Configuration -> REST API. Use that panel (or POST /api/settings/rest) so the key and the toggle stay consistent.`);
+  }
+
   db.prepare('INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)').run(key, String(value));
   res.json({ success: true, key, value: String(value) });
 }
 
 async function handleDeleteConfig(req, res) {
+  if (RESERVED_CONFIG_KEYS.has(req.params.key)) {
+    throw createHttpError(400, `"${req.params.key}" is managed under Configuration -> REST API.`);
+  }
   db.prepare('DELETE FROM config WHERE key = ?').run(req.params.key);
   res.json({ success: true, key: req.params.key });
+}
+
+function serializeRestSettings() {
+  const { requested, enabled, api_key: apiKey } = getRestApiSettings();
+  return {
+    enabled,
+    // What the toggle is set to, which differs from `enabled` when the switch
+    // is on but no key exists — the UI needs to be able to say why it's off.
+    requested,
+    api_key: apiKey,
+    has_key: Boolean(apiKey),
+    base_path: '/rest',
+    env_seeded: isTruthy(process.env.REST_API),
+  };
+}
+
+async function handleGetRestSettings(req, res) {
+  res.json(serializeRestSettings());
+}
+
+async function handleSetRestSettings(req, res) {
+  const body = req.body || {};
+  let apiKey = readConfigValue(REST_KEY_KEY) || '';
+
+  if (body.generate_key) {
+    apiKey = generateApiKey();
+  } else if (body.api_key !== undefined && body.api_key !== null) {
+    const provided = normalizeString(body.api_key);
+    // A short key is worse than no key: it looks configured while being
+    // guessable, and this endpoint is the only thing standing in front of the
+    // whole instance-control API.
+    if (provided && provided.length < 16) {
+      throw createHttpError(400, 'API key must be at least 16 characters. Use Generate for a random one.');
+    }
+    apiKey = provided;
+  }
+
+  const enabled = body.enabled === undefined ? isTruthy(readConfigValue(REST_ENABLED_KEY)) : Boolean(body.enabled);
+  if (enabled && !apiKey) {
+    throw createHttpError(400, 'The REST API cannot be enabled without an API key. Generate one first.');
+  }
+
+  writeConfigValue(REST_KEY_KEY, apiKey);
+  writeConfigValue(REST_ENABLED_KEY, enabled ? 'true' : 'false');
+
+  const settings = serializeRestSettings();
+  console.log(`[REST] ${settings.enabled ? 'Enabled' : 'Disabled'} via dashboard${body.generate_key ? ' (new key generated)' : ''}.`);
+  res.json({ success: true, ...settings });
+}
+
+// The contract, served from the same spec the /docs page renders, so the two
+// can never disagree.
+function handleOpenApiSpec(surface) {
+  return async (req, res) => {
+    res.json(buildOpenApiSpec({ surface, serverUrl: surface === 'rest' ? '/rest' : '/api' }));
+  };
+}
+
+async function handleApiDocsPage(req, res) {
+  res.sendFile(path.join(__dirname, 'public', 'api-docs.html'));
 }
 
 async function handleGetInstances(req, res) {
@@ -773,9 +956,147 @@ async function handleDeleteTab(req, res) {
   res.json({ success: true, replacement: replacement || null });
 }
 
+// Dump the DOM as the browser currently holds it. format=html returns the
+// document itself (handy for `curl -o page.html`), format=text the rendered
+// text, and the default JSON wraps it with the metadata a caller needs to know
+// what it got — which URL answered, and whether the page had finished loading.
+async function handleTabHtml(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const format = normalizeString(req.query?.format) || 'json';
+  if (!['json', 'html', 'text'].includes(format)) {
+    throw createHttpError(400, 'format must be "json", "html", or "text"');
+  }
+
+  const dump = await cdpClient.getPageDump(instance.host, instance.port, req.params.tabId);
+
+  if (format === 'html') {
+    res.type('text/html; charset=utf-8').send(dump.html);
+    return;
+  }
+  if (format === 'text') {
+    res.type('text/plain; charset=utf-8').send(dump.text || '');
+    return;
+  }
+  res.json({
+    instance_id: instance.id,
+    tab_id: req.params.tabId,
+    url: dump.url,
+    title: dump.title,
+    ready_state: dump.ready_state,
+    html_bytes: dump.html_bytes,
+    captured_at: dump.captured_at,
+    html: dump.html,
+    text: dump.text,
+  });
+}
+
+async function handleTabInspect(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const x = Number(req.body?.x);
+  const y = Number(req.body?.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    throw createHttpError(400, 'x and y are required and must be numbers (viewport CSS pixels)');
+  }
+
+  try {
+    const node = await cdpClient.inspectAt(instance.host, instance.port, req.params.tabId, Math.round(x), Math.round(y), {
+      highlight: req.body?.highlight !== false,
+    });
+    res.json({ success: true, node });
+  } catch (error) {
+    if (error.code === 'NO_NODE_AT_POINT') {
+      throw createHttpError(404, error.message);
+    }
+    throw error;
+  }
+}
+
+async function handleTabHighlightClear(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  await cdpClient.hideHighlight(instance.host, instance.port, req.params.tabId);
+  res.json({ success: true });
+}
+
+async function handleTabEvaluate(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const expression = typeof req.body?.expression === 'string' ? req.body.expression : '';
+  if (!expression.trim()) {
+    throw createHttpError(400, 'Missing expression');
+  }
+
+  try {
+    const value = await cdpClient.evaluateInTab(instance.host, instance.port, req.params.tabId, expression, {
+      awaitPromise: req.body?.await_promise !== false,
+    });
+    res.json({ success: true, value: value === undefined ? null : value });
+  } catch (error) {
+    // A throw inside the page is the caller's bug, not a server fault — report
+    // it as a 400 with the page's own message rather than a 500.
+    if (error.code === 'EVALUATION_FAILED') {
+      throw createHttpError(400, error.message);
+    }
+    throw error;
+  }
+}
+
+async function handleTabReload(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  await cdpClient.reloadTab(instance.host, instance.port, req.params.tabId, {
+    ignoreCache: Boolean(req.body?.ignore_cache),
+  });
+  res.json({ success: true });
+}
+
+async function handleTabHistory(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const direction = req.params.direction;
+  if (!['back', 'forward'].includes(direction)) {
+    throw createHttpError(400, 'direction must be "back" or "forward"');
+  }
+  const delta = direction === 'back' ? -1 : 1;
+  const moved = await cdpClient.historyGo(instance.host, instance.port, req.params.tabId, delta);
+  if (!moved) {
+    throw createHttpError(409, `No ${direction} entry in this tab's history`);
+  }
+  res.json({ success: true, ...moved });
+}
+
+async function handleTabPdf(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const data = await cdpClient.printToPdf(instance.host, instance.port, req.params.tabId, {
+    landscape: req.query?.landscape === '1' || req.query?.landscape === 'true',
+    printBackground: req.query?.background !== '0',
+  });
+  res.type('application/pdf').send(Buffer.from(data, 'base64'));
+}
+
+// The mirror of the existing cookie import: dumps every cookie in the browser
+// profile, in the same shape the import endpoint accepts, so a profile's
+// session can be moved between instances.
+async function handleExportCookies(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const tabs = cdpClient.listPageTargets(await cdpClient.getTabs(instance.host, instance.port));
+  if (!tabs.length) {
+    throw createHttpError(409, `Instance "${instance.name}" has no open page to read cookies through`);
+  }
+
+  const cookies = await cdpClient.exportCookies(instance.host, instance.port, tabs[0].id);
+  const domain = normalizeString(req.query?.domain);
+  const filtered = domain
+    ? cookies.filter((c) => String(c.domain || '').replace(/^\./, '').endsWith(domain.replace(/^\./, '')))
+    : cookies;
+
+  res.json({ instance_id: instance.id, count: filtered.length, cookies: filtered });
+}
+
 async function handleScreenshot(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
-  const data = await cdpClient.captureScreenshot(instance.host, instance.port, req.params.tabId);
+  // The live view renders the frame scaled to fit its panel anyway, so asking
+  // Chrome for exactly the resolution that will be shown costs it far less work
+  // than capturing full size and throwing pixels away in the browser.
+  const data = await cdpClient.captureScreenshot(instance.host, instance.port, req.params.tabId, {
+    scale: req.query?.scale,
+  });
   if (!data) {
     throw createHttpError(500, 'Failed to capture screenshot');
   }
@@ -866,18 +1187,82 @@ function registerRoutes(router) {
   router.delete('/instances/:id/tabs/:tabId', withErrorBoundary(handleDeleteTab));
   router.get('/instances/:id/tabs/:tabId/screenshot', withErrorBoundary(handleScreenshot));
   router.post('/instances/:id/tabs/:tabId/input', withErrorBoundary(handleInput));
+  router.get('/instances/:id/tabs/:tabId/html', withErrorBoundary(handleTabHtml));
+  router.post('/instances/:id/tabs/:tabId/evaluate', withErrorBoundary(handleTabEvaluate));
+  router.post('/instances/:id/tabs/:tabId/inspect', withErrorBoundary(handleTabInspect));
+  router.delete('/instances/:id/tabs/:tabId/highlight', withErrorBoundary(handleTabHighlightClear));
+  router.post('/instances/:id/tabs/:tabId/reload', withErrorBoundary(handleTabReload));
+  // Plain param + handler validation: Express 5's path-to-regexp dropped the
+  // inline `:param(a|b)` form.
+  router.post('/instances/:id/tabs/:tabId/history/:direction', withErrorBoundary(handleTabHistory));
+  router.get('/instances/:id/tabs/:tabId/pdf', withErrorBoundary(handleTabPdf));
   router.post('/instances/:id/cookies/import', withErrorBoundary(handleImportCookies));
+  router.get('/instances/:id/cookies', withErrorBoundary(handleExportCookies));
 }
 
 registerRoutes(legacyApi);
 registerRoutes(restApi);
 
+// Dashboard-only: an API client should not be able to rotate the key it is
+// authenticating with, or switch the surface off from under other clients.
+legacyApi.get('/settings/rest', withErrorBoundary(handleGetRestSettings));
+legacyApi.post('/settings/rest', withErrorBoundary(handleSetRestSettings));
+
+legacyApi.get('/openapi.json', withErrorBoundary(handleOpenApiSpec('dashboard')));
+legacyApi.get('/docs', withErrorBoundary(handleApiDocsPage));
+
+// Guard against the spec drifting behind the code: every route the API
+// actually serves must appear in lib/openapi.js. This compares what Express
+// registered with what the spec documents and says so at boot rather than
+// letting the published contract quietly go stale.
+function auditApiDocumentation() {
+  const documented = documentedRoutes();
+  const registered = new Set();
+  for (const layer of restApi.stack) {
+    if (!layer.route) continue;
+    // Express path params are :name; the spec uses OpenAPI's {name}.
+    const specPath = layer.route.path.replace(/:([A-Za-z0-9_]+)/g, '{$1}');
+    for (const method of Object.keys(layer.route.methods)) {
+      registered.add(`${method.toUpperCase()} ${specPath}`);
+    }
+  }
+
+  const undocumented = [...registered].filter((r) => !documented.has(r));
+  const stale = [...documented].filter((r) => !registered.has(r) && !r.endsWith('/docs') && !r.endsWith('/openapi.json'));
+  if (undocumented.length) {
+    console.log(`[API docs] Not in the OpenAPI spec: ${undocumented.join(', ')}`);
+  }
+  if (stale.length) {
+    console.log(`[API docs] Documented but not served: ${stale.join(', ')}`);
+  }
+  if (!undocumented.length && !stale.length) {
+    console.log(`[API docs] Contract covers all ${registered.size} REST routes.`);
+  }
+}
+
 restApi.get('/healthz', withErrorBoundary(handleHealthz));
 restApi.get('/healtz', withErrorBoundary(handleHealthz));
 
-if (REST_API_ENABLED) {
-  app.use('/rest', restCors, restApiAuth, restApi);
-}
+// Runs once every REST route is on the router.
+auditApiDocumentation();
+
+// Always mounted; restEnabledGate decides per request whether it answers.
+// Mounting conditionally at boot is what made this an .env-and-restart setting.
+// The trailing handler stops unmatched /rest paths from falling through to the
+// dashboard's basic-auth middleware, which answered them with a 401 challenge
+// (and a browser login prompt) instead of an honest 404.
+// Docs sit in front of restApiAuth on purpose: a browser cannot set an
+// X-API-Key header, so requiring the key would make the page unopenable — and
+// the contract carries no data and no secrets, only the shape of endpoints that
+// are themselves key-protected. It still hides behind restEnabledGate, so a
+// disabled deployment advertises nothing.
+const restDocs = express.Router();
+restDocs.get('/openapi.json', withErrorBoundary(handleOpenApiSpec('rest')));
+restDocs.get('/docs', withErrorBoundary(handleApiDocsPage));
+
+app.use('/rest', restEnabledGate, restCors, restDocs, restApiAuth, restApi, (req, res) => {
+  res.status(404).json({ error: `No REST endpoint for ${req.method} ${req.originalUrl}` });
+});
 
 // Auth Middleware for legacy UI/basic-auth API surface.
 app.use(basicAuth({
@@ -889,8 +1274,9 @@ app.use(basicAuth({
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api', legacyApi);
 
-io.on('connection', () => {
-  broadcastUpdate();
+io.on('connection', (socket) => {
+  // A fresh client needs the current state even though nothing changed.
+  socket.emit('instances_updated', getSerializedInstances());
 });
 
 const PORT = process.env.PORT || 3000;
@@ -898,7 +1284,9 @@ const HOST = '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
-  if (REST_API_ENABLED) {
-    console.log(`REST API enabled on http://${HOST}:${PORT}/rest`);
-  }
+  const rest = getRestApiSettings();
+  console.log(rest.enabled
+    ? `REST API enabled on http://${HOST}:${PORT}/rest — docs at http://${HOST}:${PORT}/rest/docs`
+    : 'REST API disabled (toggle it in Configuration -> REST API)');
+  console.log(`API contract browsable at http://${HOST}:${PORT}/api/docs`);
 });

@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chrome Fleet Control API</title>
+<!-- Deliberately self-contained: no CDN, no Swagger bundle. This project ships
+     as an offline image, and a docs page that renders blank without internet
+     would be worse than no page at all. -->
+<style>
+  :root {
+    --bg: #0f1115; --panel: #161a21; --panel-2: #1b2029; --line: #272d38;
+    --text: #e6e9ef; --muted: #8b93a3; --accent: #4c8dff; --code: #0b0d11;
+    --get: #3fb950; --post: #4c8dff; --put: #d29922; --patch: #d29922; --delete: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f7f9; --panel: #fff; --panel-2: #f0f2f5; --line: #dde1e7;
+      --text: #1b1f27; --muted: #5b6472; --code: #f0f2f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  a { color: var(--accent); }
+
+  .layout { display: flex; min-height: 100vh; }
+  aside { width: 270px; flex: 0 0 270px; border-right: 1px solid var(--line);
+          background: var(--panel); position: sticky; top: 0; height: 100vh; overflow-y: auto; }
+  main { flex: 1; min-width: 0; padding: 28px 32px 80px; max-width: 980px; }
+
+  .brand { padding: 18px 18px 12px; border-bottom: 1px solid var(--line); }
+  .brand h1 { margin: 0; font-size: 15px; letter-spacing: .2px; }
+  .brand p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+  .navgroup { padding: 12px 10px 4px; color: var(--muted);
+              font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+  aside a.navitem { display: flex; gap: 8px; align-items: center; padding: 5px 12px;
+                    color: var(--text); text-decoration: none; font-size: 12.5px; border-radius: 6px; margin: 0 6px; }
+  aside a.navitem:hover { background: var(--panel-2); }
+
+  .verb { font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 4px;
+          text-transform: uppercase; color: #fff; flex: 0 0 auto; min-width: 48px; text-align: center; }
+  .verb.get { background: var(--get); } .verb.post { background: var(--post); }
+  .verb.put, .verb.patch { background: var(--put); } .verb.delete { background: var(--delete); }
+
+  .keybar { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 14px 16px; margin-bottom: 26px; }
+  .keybar label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .keyrow { display: flex; gap: 8px; flex-wrap: wrap; }
+  input[type=password], input[type=text] { flex: 1; min-width: 220px; background: var(--code);
+    border: 1px solid var(--line); color: var(--text); border-radius: 7px; padding: 7px 10px; font-family: inherit; }
+  button { background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+           border-radius: 7px; padding: 7px 13px; cursor: pointer; font-size: 13px; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .op { border: 1px solid var(--line); border-radius: 10px; margin-bottom: 16px;
+        background: var(--panel); overflow: hidden; scroll-margin-top: 16px; }
+  .op > summary { list-style: none; cursor: pointer; padding: 12px 14px;
+                  display: flex; gap: 10px; align-items: center; }
+  .op > summary::-webkit-details-marker { display: none; }
+  .op > summary:hover { background: var(--panel-2); }
+  .op .path { font-family: ui-monospace, monospace; font-size: 13px; word-break: break-all; }
+  .op .sum { color: var(--muted); font-size: 12.5px; margin-left: auto; text-align: right; }
+  .opbody { padding: 4px 16px 16px; border-top: 1px solid var(--line); }
+
+  h2 { font-size: 18px; margin: 34px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  h2:first-of-type { margin-top: 26px; }
+  h4 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em;
+       color: var(--muted); margin: 16px 0 6px; }
+  p.desc { margin: 10px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; }
+  pre { background: var(--code); border: 1px solid var(--line); border-radius: 8px;
+        padding: 11px 13px; overflow-x: auto; font-size: 12.5px; margin: 0; }
+  .req { color: var(--delete); font-size: 11px; }
+  .badge { display: inline-block; background: var(--panel-2); border: 1px solid var(--line);
+           border-radius: 20px; padding: 1px 9px; font-size: 11.5px; color: var(--muted); }
+  .tryrow { display: flex; gap: 8px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+  .status { font-family: ui-monospace, monospace; font-size: 12px; padding: 2px 8px; border-radius: 5px; }
+  .status.ok { background: rgba(63,185,80,.15); color: var(--get); }
+  .status.err { background: rgba(248,81,73,.15); color: var(--delete); }
+  .intro { color: var(--muted); }
+  .intro strong { color: var(--text); }
+  @media (max-width: 860px) { aside { display: none; } main { padding: 20px 16px 60px; } }
+</style>
+</head>
+<body>
+<div class="layout">
+  <aside>
+    <div class="brand">
+      <h1>Chrome Fleet Control</h1>
+      <p id="brandBase" class="mono"></p>
+      <input type="text" id="navFilter" placeholder="Filter endpoints…" autocomplete="off"
+             style="width:100%;margin-top:10px;font-size:12.5px;padding:5px 8px">
+    </div>
+    <nav id="nav"></nav>
+  </aside>
+  <main>
+    <h1 id="title" style="margin:0 0 6px;font-size:22px;">API</h1>
+    <p class="intro" id="intro"></p>
+    <p class="intro">Machine-readable contract: <a id="specLink" href="#">openapi.json</a>. Import it into Postman, Insomnia, or a client generator.</p>
+
+    <div class="keybar" id="keybar" hidden>
+      <label for="apiKey">API key, used only by the <strong>Try</strong> buttons on this page. Kept in this tab's sessionStorage, never sent anywhere else.</label>
+      <div class="keyrow">
+        <input type="password" id="apiKey" placeholder="paste your key" autocomplete="off" spellcheck="false">
+        <button id="keyToggle" type="button">Show</button>
+        <button id="keySave" class="primary" type="button">Save</button>
+      </div>
+    </div>
+
+    <div id="ops"></div>
+  </main>
+</div>
+
+<script>
+(() => {
+  // The page is served at both /api/docs and /rest/docs; everything is derived
+  // from where it was loaded so one file serves both surfaces.
+  const base = location.pathname.replace(/\/docs\/?$/, '');
+  const isRest = base.endsWith('/rest');
+  const KEY_STORE = 'cfc-api-docs-key';
+
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === 'class') n.className = v;
+      else if (k === 'text') n.textContent = v;
+      else if (v !== null && v !== undefined) n.setAttribute(k, v);
+    }
+    for (const kid of kids) if (kid) n.append(kid);
+    return n;
+  };
+  const pretty = (v) => JSON.stringify(v, null, 2);
+  // Descriptions carry inline `code` and **bold**; nothing else is interpreted,
+  // and the text is escaped first so a spec can never inject markup.
+  const lightMarkdown = (text) => String(text)
+    .replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  const slug = (m, p) => (m + p).replace(/[^a-z0-9]+/gi, '-').toLowerCase();
+
+  // Resolve $ref and pull out the example a schema carries, so every operation
+  // can show a concrete body instead of an abstract type listing.
+  function exampleFor(spec, node, depth = 0) {
+    if (!node || depth > 6) return null;
+    if (node.$ref) {
+      const name = node.$ref.split('/').pop();
+      return exampleFor(spec, spec.components.schemas[name], depth + 1);
+    }
+    if (node.example !== undefined) return node.example;
+    if (node.type === 'array' && node.items) {
+      const inner = exampleFor(spec, node.items, depth + 1);
+      return inner === null ? [] : [inner];
+    }
+    if (node.type === 'object' && node.properties) {
+      const out = {};
+      for (const [k, v] of Object.entries(node.properties)) {
+        const ex = exampleFor(spec, v, depth + 1);
+        if (ex !== null) out[k] = ex;
+      }
+      return Object.keys(out).length ? out : null;
+    }
+    return null;
+  }
+
+  function curlFor(method, path, bodyExample) {
+    const url = `${location.origin}${base}${path}`;
+    const parts = [`curl -X ${method.toUpperCase()}`];
+    if (isRest) parts.push(`-H "X-API-Key: $KEY"`);
+    if (bodyExample) {
+      parts.push(`-H 'Content-Type: application/json'`);
+      parts.push(`-d '${JSON.stringify(bodyExample)}'`);
+    }
+    parts.push(`"${url}"`);
+    return parts.join(' \\\n  ');
+  }
+
+  function paramTable(params) {
+    const t = el('table');
+    t.append(el('thead', {}, (() => {
+      const tr = el('tr');
+      for (const h of ['Name', 'In', 'Type', 'Description']) tr.append(el('th', { text: h }));
+      return tr;
+    })()));
+    const tb = el('tbody');
+    for (const p of params) {
+      const tr = el('tr');
+      const nameCell = el('td');
+      nameCell.append(el('code', { text: p.name }));
+      if (p.required) nameCell.append(el('span', { class: 'req', text: ' *' }));
+      tr.append(nameCell);
+      tr.append(el('td', {}, el('span', { class: 'badge', text: p.in })));
+      const s = p.schema || {};
+      tr.append(el('td', {}, el('code', { text: s.enum ? s.enum.join(' | ') : (s.type || '-') })));
+      tr.append(el('td', { text: p.description || '' }));
+      tb.append(tr);
+    }
+    t.append(tb);
+    return t;
+  }
+
+  function buildOperation(spec, method, path, op) {
+    const det = el('details', { class: 'op', id: slug(method, path) });
+    const sum = el('summary');
+    sum.append(el('span', { class: 'verb ' + method, text: method }));
+    sum.append(el('span', { class: 'path', text: base + path }));
+    sum.append(el('span', { class: 'sum', text: op.summary || '' }));
+    det.append(sum);
+
+    const b = el('div', { class: 'opbody' });
+    if (op.description) {
+      const p = el('p', { class: 'desc' });
+      p.innerHTML = lightMarkdown(op.description);
+      b.append(p);
+    }
+
+    if (op.parameters?.length) {
+      b.append(el('h4', { text: 'Parameters' }));
+      b.append(paramTable(op.parameters));
+    }
+
+    const bodyExample = op.requestBody
+      ? exampleFor(spec, op.requestBody.content['application/json'].schema) ||
+        op.requestBody.content['application/json'].example
+      : null;
+
+    if (op.requestBody) {
+      b.append(el('h4', { text: 'Request body' + (op.requestBody.required ? '' : ' (optional)') }));
+      b.append(el('pre', { text: pretty(bodyExample ?? {}) }));
+    }
+
+    b.append(el('h4', { text: 'Responses' }));
+    const rt = el('table');
+    rt.append(el('thead', {}, (() => {
+      const tr = el('tr');
+      for (const h of ['Code', 'Description']) tr.append(el('th', { text: h }));
+      return tr;
+    })()));
+    const rtb = el('tbody');
+    for (const [code, resp] of Object.entries(op.responses || {})) {
+      const tr = el('tr');
+      tr.append(el('td', {}, el('code', { text: code })));
+      tr.append(el('td', { text: resp.description || '' }));
+      rtb.append(tr);
+    }
+    rt.append(rtb);
+    b.append(rt);
+
+    const okSchema = op.responses?.['200']?.content?.['application/json'];
+    if (okSchema) {
+      const ex = okSchema.example ?? exampleFor(spec, okSchema.schema);
+      if (ex !== null && ex !== undefined) {
+        b.append(el('h4', { text: 'Example response' }));
+        b.append(el('pre', { text: pretty(ex) }));
+      }
+    }
+
+    b.append(el('h4', { text: 'curl' }));
+    b.append(el('pre', { text: curlFor(method, path, bodyExample) }));
+
+    // --- Try it -------------------------------------------------------------
+    const hasPathParams = /\{/.test(path);
+    const row = el('div', { class: 'tryrow' });
+    const inputs = {};
+    for (const p of (op.parameters || [])) {
+      if (p.in !== 'path' && p.in !== 'query') continue;
+      const i = el('input', {
+        type: 'text', placeholder: p.name + (p.required ? ' *' : ''),
+        value: p.example !== undefined ? String(p.example) : '',
+        style: 'min-width:120px;flex:0 1 180px',
+      });
+      inputs[p.name] = { input: i, in: p.in };
+      row.append(i);
+    }
+    let bodyBox = null;
+    if (op.requestBody) {
+      bodyBox = el('textarea', {
+        rows: Math.min(8, pretty(bodyExample ?? {}).split('\n').length),
+        style: 'width:100%;background:var(--code);border:1px solid var(--line);color:var(--text);border-radius:7px;padding:9px;font-family:ui-monospace,monospace;font-size:12.5px;margin-top:10px',
+      });
+      bodyBox.value = pretty(bodyExample ?? {});
+    }
+    const go = el('button', { class: 'primary', type: 'button', text: 'Try' });
+    const status = el('span', { class: 'status', text: '' });
+    row.append(go, status);
+    b.append(row);
+    if (bodyBox) b.append(bodyBox);
+    const out = el('pre', { style: 'margin-top:10px;display:none' });
+    b.append(out);
+
+    go.addEventListener('click', async () => {
+      let url = base + path;
+      const query = [];
+      for (const [name, { input, in: loc }] of Object.entries(inputs)) {
+        const v = input.value.trim();
+        if (loc === 'path') url = url.replace('{' + name + '}', encodeURIComponent(v));
+        else if (v) query.push(encodeURIComponent(name) + '=' + encodeURIComponent(v));
+      }
+      if (query.length) url += '?' + query.join('&');
+      if (/\{/.test(url)) {
+        status.className = 'status err';
+        status.textContent = 'fill in the path parameters';
+        return;
+      }
+
+      const headers = {};
+      const key = sessionStorage.getItem(KEY_STORE);
+      if (isRest && key) headers['X-API-Key'] = key;
+      const init = { method: method.toUpperCase(), headers };
+      if (bodyBox && bodyBox.value.trim()) {
+        headers['Content-Type'] = 'application/json';
+        try { init.body = JSON.stringify(JSON.parse(bodyBox.value)); }
+        catch (e) { status.className = 'status err'; status.textContent = 'body is not valid JSON'; return; }
+      }
+
+      status.className = 'status';
+      status.textContent = '…';
+      out.style.display = 'block';
+      out.textContent = '';
+      try {
+        const res = await fetch(url, init);
+        status.className = 'status ' + (res.ok ? 'ok' : 'err');
+        status.textContent = res.status + ' ' + res.statusText;
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          out.textContent = pretty(await res.json());
+        } else if (ct.startsWith('image/') || ct.includes('pdf')) {
+          const blob = await res.blob();
+          out.textContent = `${ct}, ${blob.size} bytes. Binary response, not shown.`;
+        } else {
+          const t = await res.text();
+          out.textContent = t.length > 20000 ? t.slice(0, 20000) + '\n… truncated' : t;
+        }
+      } catch (e) {
+        status.className = 'status err';
+        status.textContent = 'network error';
+        out.textContent = String(e);
+      }
+    });
+
+    det.append(b);
+    return det;
+  }
+
+  async function render() {
+    const specUrl = base + '/openapi.json';
+    document.getElementById('specLink').href = specUrl;
+    document.getElementById('brandBase').textContent = base;
+
+    let spec;
+    try {
+      const res = await fetch(specUrl);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      spec = await res.json();
+    } catch (e) {
+      document.getElementById('ops').append(el('pre', { text: 'Could not load ' + specUrl + ': ' + e.message }));
+      return;
+    }
+
+    document.getElementById('title').textContent = spec.info.title;
+    document.getElementById('intro').innerHTML = lightMarkdown(spec.info.description)
+      .replace(/\n/g, '<br>');
+    document.title = spec.info.title;
+    if (isRest) document.getElementById('keybar').hidden = false;
+
+    const byTag = new Map();
+    for (const [path, methods] of Object.entries(spec.paths)) {
+      for (const [method, op] of Object.entries(methods)) {
+        const tag = (op.tags && op.tags[0]) || 'Other';
+        if (!byTag.has(tag)) byTag.set(tag, []);
+        byTag.get(tag).push([method, path, op]);
+      }
+    }
+
+    const ops = document.getElementById('ops');
+    const nav = document.getElementById('nav');
+    const order = (spec.tags || []).map((t) => t.name).filter((n) => byTag.has(n));
+    for (const tag of byTag.keys()) if (!order.includes(tag)) order.push(tag);
+
+    for (const tag of order) {
+      const meta = (spec.tags || []).find((t) => t.name === tag);
+      const h = el('h2', { id: 'tag-' + slug('', tag), text: tag });
+      ops.append(h);
+      if (meta?.description) ops.append(el('p', { class: 'intro', text: meta.description }));
+      nav.append(el('div', { class: 'navgroup', text: tag }));
+
+      for (const [method, path, op] of byTag.get(tag)) {
+        ops.append(buildOperation(spec, method, path, op));
+        const a = el('a', {
+          class: 'navitem',
+          href: '#' + slug(method, path),
+          title: method.toUpperCase() + ' ' + base + path,
+          'data-search': (method + ' ' + path + ' ' + (op.summary || '')).toLowerCase(),
+        });
+        a.append(el('span', { class: 'verb ' + method, text: method }));
+        a.append(el('span', {
+          text: op.summary || path,
+          style: 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap',
+        }));
+        nav.append(a);
+      }
+    }
+
+    const filter = document.getElementById('navFilter');
+    filter.addEventListener('input', () => {
+      const q = filter.value.trim().toLowerCase();
+      let visibleInGroup = 0;
+      let lastGroup = null;
+      for (const node of nav.children) {
+        if (node.classList.contains('navgroup')) {
+          if (lastGroup) lastGroup.hidden = visibleInGroup === 0;
+          lastGroup = node;
+          visibleInGroup = 0;
+          node.hidden = false;
+          continue;
+        }
+        const hit = !q || node.dataset.search.includes(q);
+        node.hidden = !hit;
+        if (hit) visibleInGroup += 1;
+      }
+      if (lastGroup) lastGroup.hidden = visibleInGroup === 0;
+    });
+
+    // Opening a deep link should reveal the operation it points at.
+    const openFromHash = () => {
+      if (!location.hash) return;
+      const target = document.getElementById(location.hash.slice(1));
+      if (target?.tagName === 'DETAILS') { target.open = true; target.scrollIntoView(); }
+    };
+    window.addEventListener('hashchange', openFromHash);
+    openFromHash();
+  }
+
+  const keyInput = document.getElementById('apiKey');
+  keyInput.value = sessionStorage.getItem(KEY_STORE) || '';
+  document.getElementById('keySave').addEventListener('click', () => {
+    sessionStorage.setItem(KEY_STORE, keyInput.value.trim());
+    const b = document.getElementById('keySave');
+    b.textContent = 'Saved';
+    setTimeout(() => { b.textContent = 'Save'; }, 1400);
+  });
+  document.getElementById('keyToggle').addEventListener('click', (e) => {
+    const hidden = keyInput.type === 'password';
+    keyInput.type = hidden ? 'text' : 'password';
+    e.target.textContent = hidden ? 'Hide' : 'Show';
+  });
+
+  render();
+})();
+</script>
+</body>
+</html>

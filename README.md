@@ -11,14 +11,23 @@ Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium ins
 - Keep separate browser profiles per instance
 - Port forwarding through `socat`
 - Per-instance launch mode selector with `GUI`, `Headless via Xvfb`, and `Native Chrome Headless`
-- Smooth, low-latency **live tab control**: continuous flicker-free streaming, adjustable
-  frame rate, full mouse (click, drag, scroll, right-click) and **keyboard** input (typing,
+- Smooth, low-latency **live tab control**: continuous flicker-free streaming from 10 fps
+  up to Max, full mouse (click, drag, scroll, right-click) and **keyboard** input (typing,
   special keys, and Ctrl/Cmd shortcuts)
+- Tab toolbar with **back / forward / reload**, and an address bar that follows the page
+  wherever it navigates itself
+- **Inspect loaded HTML** per tab: view, copy, or download the DOM *after* JavaScript has
+  run — not the raw server response
+- Run JavaScript in any tab and get the result back as JSON
+- Export a page to **PDF**, or the viewport to JPEG
 - Persistent CDP connections per tab keep interactive control fast
-- Import cookies into a running browser instance through CDP from Netscape or JSON exports
+- Import cookies into a running browser instance through CDP from Netscape or JSON exports,
+  and export the profile's cookies back out
+- Closing the last tab never stops an instance — a replacement blank tab is opened first
 - Server dashboard for CPU, memory, disk, uptime, and network interfaces
 - Basic Auth for the UI and legacy `/api/*` endpoints
-- Optional API key protected REST API under `/rest/*`
+- Optional API key protected REST API under `/rest/*`, toggled from the dashboard at runtime
+  (no restart) — see [docs/REST-API.md](docs/REST-API.md)
 - `run.sh` auto-creates `.env` from `.env.example` on first launch and enables WebGL-friendly Chrome flags by default
 
 ## Requirements
@@ -138,7 +147,7 @@ Configuration is managed via a `.env` file. To get started, copy the example con
 cp .env.example .env
 ```
 
-Edit the `.env` file to set your credentials (`CHROME_FLEET_USERNAME`, `CHROME_FLEET_PASSWORD`), `PORT`, `REST_API` options, and background daemon settings (`RUN_IN_SCREEN`). You can also configure `POP_UP_REAL_BROWSER=true` to force a GUI launch instead of headless mode, point `CHROME_BIN` at a specific browser binary, and tune `SCREENSHOT_QUALITY` (10–100) for the live control stream. See `.env.example` for the full, documented list.
+Edit the `.env` file to set your credentials (`CHROME_FLEET_USERNAME`, `CHROME_FLEET_PASSWORD`), `PORT`, the initial `REST_API` seed values, and background daemon settings (`RUN_IN_SCREEN`). You can also configure `POP_UP_REAL_BROWSER=true` to force a GUI launch instead of headless mode, point `CHROME_BIN` at a specific browser binary, and tune `SCREENSHOT_QUALITY` (10–100) for the live control stream. See `.env.example` for the full, documented list.
 
 If you run `./run.sh` without a `.env`, it copies `.env.example` to `.env` automatically and continues with the defaults (review the credentials before exposing the server).
 
@@ -157,7 +166,7 @@ Notes:
 - `GUI` mode needs a real desktop display on Linux.
 - `Headless via Xvfb` requires `Xvfb` and does not silently fall back to another mode.
 - `run.sh` enables `CHROME_MANAGER_ENABLE_WEBGL=1` by default.
-- If `REST_API=true` and `REST_API_KEY` is empty, the launcher aborts.
+- `REST_API` / `REST_API_KEY` only seed the REST settings on first run; afterwards the API is toggled from Configuration -> REST API. A toggle that is on with no key is treated as off.
 
 ## Docker Deployment
 
@@ -207,128 +216,48 @@ both `amd64` (native Linux) and `arm64` (Apple Silicon via colima).
 ## Authentication
 
 - The UI and legacy `/api/*` endpoints use Basic Auth with `USERNAME` and `PASSWORD`.
-- The REST API under `/rest/*` is only enabled when `REST_API=true`.
+- The REST API under `/rest/*` is enabled from the dashboard (Configuration -> REST API) and takes effect immediately, with no restart. While it is off, every `/rest/*` path answers 404.
 - The REST API accepts `X-API-Key: <key>` or `Authorization: Bearer <key>`.
 
-## Main REST Endpoints
+## REST API
 
-All endpoints below are mounted under `/rest` when the REST API is enabled.
+**Browsable contract, served by the app itself: `http://HOST:PORT/rest/docs`**
+(or `/api/docs` with your dashboard login). It renders from
+`GET /rest/openapi.json` — an OpenAPI 3.1 document you can import into Postman,
+Insomnia, or a client generator — and every operation has a **Try** button.
 
-### Instances
+**Prose guide with worked examples: [docs/REST-API.md](docs/REST-API.md).**
 
-- `GET /instances`
-- `GET /instances/:id`
-- `POST /instances`
-- `PUT /instances/:id`
-- `PATCH /instances/:id`
-- `DELETE /instances/:id`
-- `POST /instances/:id/start`
-- `POST /instances/:id/spawn`
-- `POST /instances/:id/stop`
-- `GET /instances/:id/logs`
-
-`GET /instances/:id` includes:
-
-- `host` and `port`
-- `launch_mode`, `launch_backend`, `headless_enabled`, and `xvfb_enabled`
-- `debug_endpoints`
-- `forward_targets`
-- `forward_to`
-
-### Health and Server
-
-- `GET /healthz`
-- `GET /healtz`
-- `GET /server/stats`
-- `GET /server/logs`
-- `GET /server/healthz`
-- `GET /server/healtz`
-
-`/healthz` returns CPU usage, memory usage, disk usage, uptime, network interfaces, and an instance status summary.
-
-### Config and Tab Control
-
-The REST API also exposes the same operational features that exist in the legacy `/api` surface:
-
-- `GET /config`
-- `POST /config`
-- `DELETE /config/:key`
-- `GET /instances/:id/tabs`
-- `POST /instances/:id/tabs/new`
-- `POST /instances/:id/tabs/:tabId/activate`
-- `POST /instances/:id/tabs/:tabId/navigate`
-- `DELETE /instances/:id/tabs/:tabId`
-- `GET /instances/:id/tabs/:tabId/screenshot`
-- `POST /instances/:id/tabs/:tabId/input`
-- `POST /instances/:id/cookies/import`
-
-`POST /instances/:id/cookies/import` expects JSON like:
-
-```json
-{
-  "files": [
-    {
-      "name": "x.com_cookies.txt",
-      "content": "# Netscape HTTP Cookie File\n..."
-    }
-  ]
-}
-```
-
-Supported import formats:
-
-- Netscape cookie files such as browser-exported `.txt`
-- JSON arrays of cookies
-- JSON objects containing a `cookies` array
-
-## `curl` Examples
-
-List instances:
+Enable it in the dashboard under **Configuration -> REST API**, generate a key,
+and call it with `X-API-Key: <key>` (or `Authorization: Bearer <key>`) against
+`http://HOST:PORT/rest`.
 
 ```bash
-curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances
+BASE=http://127.0.0.1:3000/rest
+AUTH="X-API-Key: your-key-here"
+
+curl -H "$AUTH" $BASE/instances                      # list instances
+curl -X POST -H "$AUTH" $BASE/instances/1/start      # launch the browser
+curl -H "$AUTH" "$BASE/instances/1/tabs/$TAB/html?format=html" -o page.html
 ```
 
-Get instance details:
+What it covers:
 
-```bash
-curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances/1
-```
+| Area | Endpoints |
+|---|---|
+| Instances | list / read / create / update / delete, `start`, `stop`, `logs` |
+| Tabs | list, open, close, `navigate`, `reload`, `history/back`, `history/forward`, `activate` |
+| Page content | `html` (loaded DOM, `format=json\|html\|text`), `evaluate`, `screenshot`, `pdf` |
+| Input | `input` — mouse, key, and text events |
+| Cookies | export (`GET /cookies`) and import (`POST /cookies/import`) |
+| Health | `healthz`, `server/stats`, `server/logs`, `config` |
+| Docs | `docs` (browsable page), `openapi.json` (the contract) |
 
-Spawn an instance:
+Two things worth knowing before you script against it:
 
-```bash
-curl -X POST -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances/1/spawn
-```
-
-Update an instance:
-
-```bash
-curl -X PATCH \
-  -H "X-API-Key: super-secret-key" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Chrome-1001","notes":"updated from REST"}' \
-  http://localhost:3000/rest/instances/1
-```
-
-Delete an instance:
-
-```bash
-curl -X DELETE -H "X-API-Key: super-secret-key" http://localhost:3000/rest/instances/1
-```
-
-Health check:
-
-```bash
-curl -H "X-API-Key: super-secret-key" http://localhost:3000/rest/healthz
-```
-
-Import cookies:
-
-```bash
-curl -X POST \
-  -H "X-API-Key: super-secret-key" \
-  -H "Content-Type: application/json" \
-  -d '{"files":[{"name":"x.com_cookies.txt","content":"# Netscape HTTP Cookie File\n.x.com\tTRUE\t/\tTRUE\t1808403617\tauth_token\tvalue"}]}' \
-  http://localhost:3000/rest/instances/1/cookies/import
-```
+- **`GET /instances/:id/tabs/:tabId/html` returns the DOM the browser currently
+  holds** — after scripts have run — which is not what re-fetching the URL gives
+  you. `ready_state` in the response tells you whether the load had finished.
+- **Closing the last tab never stops an instance.** The API opens a replacement
+  blank tab first and returns it as `replacement`, because in `gui`/`xvfb` mode
+  closing the final tab would terminate the browser.

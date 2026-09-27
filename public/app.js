@@ -62,6 +62,7 @@ const focusHint = document.getElementById('focusHint');
 const btnLiveToggle = document.getElementById('btnLiveToggle');
 const liveToggleLabel = document.getElementById('liveToggleLabel');
 const liveFps = document.getElementById('liveFps');
+const liveScale = document.getElementById('liveScale');
 const streamStatusDot = document.getElementById('streamStatusDot');
 const streamStatusText = document.getElementById('streamStatusText');
 const streamLatency = document.getElementById('streamLatency');
@@ -229,6 +230,7 @@ function switchView(viewName) {
         pageTitle.innerText = 'Configuration';
         btnAddInstance.parentElement.classList.add('d-none');
         loadConfig();
+        loadRestSettings();
         stopStats();
     }
 }
@@ -828,7 +830,9 @@ async function openControl(id, name) {
     resetControlView();
     controlModalOpen = true;
     controlModal.show();
+    lastTabsSignature = '';
     await loadTabs();
+    startTabPoll();
     // Auto-select the first tab so the operator lands on a live view.
     if (!currentTabId && currentTabs.length) selectTab(currentTabs[0].id);
 }
@@ -848,13 +852,26 @@ function resetControlView() {
 controlModalEl.addEventListener('hidden.bs.modal', () => {
     controlModalOpen = false;
     currentInstanceId = null;
+    stopTabPoll();
     resetControlView();
 });
 
+// Re-rendering the list on every poll would flicker and drop hover state, so
+// the markup is only rebuilt when something a viewer can actually see changed.
+let lastTabsSignature = '';
+
 async function loadTabs() {
+    if (!currentInstanceId) return;
     const tabs = await fetchAPI(`/api/instances/${currentInstanceId}/tabs`);
     currentTabs = Array.isArray(tabs) ? tabs.filter(t => t.type === 'page' || t.type === undefined) : [];
     tabCountBadge.innerText = currentTabs.length;
+
+    const signature = `${currentTabId}::` + currentTabs.map(t => `${t.id}|${t.title}|${t.url}|${t.favIconUrl || ''}`).join('~');
+    if (signature === lastTabsSignature) {
+        syncAddressBar();
+        return;
+    }
+    lastTabsSignature = signature;
 
     tabList.innerHTML = currentTabs.map(tab => `
         <button type="button" class="list-group-item list-group-item-action tab-list-item d-flex align-items-center gap-2 ${currentTabId === tab.id ? 'active' : ''}"
@@ -864,8 +881,12 @@ async function loadTabs() {
                 <div class="text-truncate small fw-bold">${escapeHtml(tab.title || 'No Title')}</div>
                 <div class="text-truncate x-small opacity-75" style="font-size: 0.7rem;">${escapeHtml(tab.url)}</div>
             </div>
+            <span class="tab-inspect px-1" role="button" tabindex="-1" title="Inspect loaded HTML"
+                  data-inspect-tab-id="${escapeAttr(tab.id)}"><i class="bi bi-code-slash"></i></span>
         </button>
     `).join('');
+
+    syncAddressBar();
 
     // If the previously controlled tab is gone, drop back to the empty state.
     if (currentTabId && !currentTabs.some(t => t.id === currentTabId)) {
@@ -878,7 +899,37 @@ async function loadTabs() {
     }
 }
 
+// The page can move on its own — a link click sent through the live view, a
+// redirect, a back/forward — so the address bar follows the tab's real URL.
+// Never while the operator is typing in it, or their half-typed URL vanishes.
+function syncAddressBar() {
+    const active = currentTabs.find(t => t.id === currentTabId);
+    if (!active) return;
+    if (document.activeElement === activeTabUrl) return;
+    if (activeTabUrl.value !== (active.url || '')) activeTabUrl.value = active.url || '';
+}
+
+// Keep titles, URLs and the tab set fresh while the control view is open.
+let tabPollTimer = null;
+function startTabPoll() {
+    stopTabPoll();
+    tabPollTimer = setInterval(() => { if (controlModalOpen) loadTabs(); }, 3000);
+}
+function stopTabPoll() {
+    if (tabPollTimer) clearInterval(tabPollTimer);
+    tabPollTimer = null;
+}
+
 tabList.addEventListener('click', (e) => {
+    // The inspect affordance lives inside the tab button, so it has to be
+    // checked first or the row's own click handler swallows it.
+    const inspect = e.target.closest('[data-inspect-tab-id]');
+    if (inspect) {
+        e.preventDefault();
+        e.stopPropagation();
+        openHtmlInspector(inspect.getAttribute('data-inspect-tab-id'));
+        return;
+    }
     const btn = e.target.closest('[data-tab-id]');
     if (btn) selectTab(btn.getAttribute('data-tab-id'));
 });
@@ -926,6 +977,20 @@ function setStreamStatus(state, latencyMs) {
     streamLatency.innerText = (state === 'live' && typeof latencyMs === 'number') ? `${latencyMs} ms` : '—';
 }
 
+// Capture resolution to ask for. "Auto" requests exactly what the panel will
+// display: the image is scaled to fit anyway, so anything sharper is pixels
+// Chrome reads back and the browser immediately throws away.
+function currentCaptureScale() {
+    const choice = liveScale ? liveScale.value : 'auto';
+    if (choice !== 'auto') return Number(choice);
+    const shown = tabScreenshot.clientWidth;
+    const natural = tabScreenshot.naturalWidth;
+    if (!shown || !natural) return 1;
+    // Round up to a 0.05 step so small panel resizes do not churn the value and
+    // defeat the server's frame sharing.
+    return Math.min(1, Math.max(0.25, Math.ceil((shown / natural) * 20) / 20));
+}
+
 async function grabAndSwap() {
     if (!currentInstanceId || !currentTabId) return false;
     // Remember which tab this frame belongs to so a late-arriving frame from a
@@ -934,7 +999,7 @@ async function grabAndSwap() {
     const reqTab = currentTabId;
     const t0 = performance.now();
     try {
-        const res = await fetch(`/api/instances/${reqInstance}/tabs/${reqTab}/screenshot?t=${Date.now()}`);
+        const res = await fetch(`/api/instances/${reqInstance}/tabs/${reqTab}/screenshot?scale=${currentCaptureScale()}&t=${Date.now()}`);
         if (res.status === 401) { window.location.reload(); return false; }
         if (!res.ok) throw new Error(`screenshot ${res.status}`);
         const blob = await res.blob();
@@ -972,6 +1037,7 @@ function startStream() {
     (async () => {
         let fails = 0;
         while (controlModalOpen && liveEnabled && currentTabId && token === streamToken) {
+            const frameStart = performance.now();
             const ok = await grabAndSwap();
             if (ok) {
                 fails = 0;
@@ -985,8 +1051,15 @@ function startStream() {
                     await loadTabs();
                 }
             }
-            const interval = parseInt(liveFps.value, 10) || 500;
-            await sleep(ok ? interval : Math.max(interval, 1000)); // back off on error
+            // The selector is a target frame *rate*, so the wait is whatever is
+            // left of the frame's budget after the capture, not a flat delay
+            // added on top of it. Treating it as a flat delay is why "10 fps"
+            // used to deliver about 6: a ~70 ms capture plus a 100 ms sleep.
+            const target = parseInt(liveFps.value, 10);
+            const budget = Number.isFinite(target) && target > 0 ? 1000 / target : 0;
+            const elapsed = performance.now() - frameStart;
+            const wait = ok ? Math.max(0, budget - elapsed) : Math.max(budget, 1000);
+            await sleep(wait); // back off on error
         }
         streamLoopActive = false;
     })();
@@ -1061,6 +1134,113 @@ document.getElementById('btnCloseTab').addEventListener('click', async () => {
     else if (currentTabs.length) selectTab(currentTabs[0].id);
 });
 
+// --- Tab navigation (back / forward / reload) ---
+async function tabAction(path, options, failureMessage) {
+    if (!currentInstanceId || !currentTabId) return;
+    try {
+        await fetchJsonOrThrow(`/api/instances/${currentInstanceId}/tabs/${currentTabId}${path}`, {
+            method: 'POST',
+            ...options,
+        });
+        nudge(900);
+        setTimeout(loadTabs, 1200); // let the new document settle, then refresh titles/URLs
+    } catch (e) {
+        // "nothing to go back to" is a normal outcome, not an error worth a dialog.
+        if (e.message && /No (back|forward) entry/.test(e.message)) return;
+        alert(`${failureMessage}: ${e.message}`);
+    }
+}
+
+document.getElementById('btnTabBack').addEventListener('click', () => tabAction('/history/back', {}, 'Back failed'));
+document.getElementById('btnTabForward').addEventListener('click', () => tabAction('/history/forward', {}, 'Forward failed'));
+document.getElementById('btnTabReload').addEventListener('click', (e) => tabAction('/reload', {
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ignore_cache: e.shiftKey }),
+}, 'Reload failed'));
+
+// --- Loaded HTML inspector ---
+// Shows the DOM as the browser currently holds it — after scripts have run —
+// which is what you actually want to look at, and is not what re-fetching the
+// URL would give you.
+let htmlModalInstance = null;
+let htmlInspectorTabId = null;
+let htmlInspectorSource = '';
+// Rendering an enormous document into a <pre> locks the tab up, so the preview
+// is capped; Download and Copy still hand over the whole thing.
+const HTML_PREVIEW_LIMIT = 400000;
+
+const htmlModalUrl = document.getElementById('htmlModalUrl');
+const htmlModalMeta = document.getElementById('htmlModalMeta');
+const htmlModalBody = document.getElementById('htmlModalBody');
+const htmlModalNotice = document.getElementById('htmlModalNotice');
+
+async function loadHtmlInspector(tabId) {
+    htmlInspectorTabId = tabId;
+    htmlInspectorSource = '';
+    htmlModalBody.textContent = 'Loading…';
+    htmlModalNotice.classList.add('d-none');
+    htmlModalMeta.innerText = '—';
+
+    try {
+        const dump = await fetchJsonOrThrow(`/api/instances/${currentInstanceId}/tabs/${tabId}/html`);
+        if (!dump) return;
+        htmlInspectorSource = dump.html || '';
+        htmlModalUrl.innerText = dump.url || '';
+        htmlModalUrl.title = dump.url || '';
+        htmlModalMeta.innerText = `${formatBytes(dump.html_bytes)} · readyState: ${dump.ready_state}`;
+
+        if (htmlInspectorSource.length > HTML_PREVIEW_LIMIT) {
+            htmlModalNotice.innerText = `Document is ${formatBytes(dump.html_bytes)}; showing the first ${formatBytes(HTML_PREVIEW_LIMIT)}. Download or Copy gives you all of it.`;
+            htmlModalNotice.classList.remove('d-none');
+        }
+        htmlModalBody.textContent = htmlInspectorSource.slice(0, HTML_PREVIEW_LIMIT);
+    } catch (e) {
+        htmlModalBody.textContent = `Could not read the document: ${e.message}`;
+    }
+}
+
+function openHtmlInspector(tabId) {
+    if (!currentInstanceId || !tabId) return;
+    if (!htmlModalInstance) htmlModalInstance = new bootstrap.Modal(document.getElementById('htmlModal'));
+    htmlModalInstance.show();
+    loadHtmlInspector(tabId);
+}
+
+document.getElementById('btnInspectHtml').addEventListener('click', () => openHtmlInspector(currentTabId));
+document.getElementById('btnHtmlRefresh').addEventListener('click', () => {
+    if (htmlInspectorTabId) loadHtmlInspector(htmlInspectorTabId);
+});
+
+document.getElementById('btnHtmlCopy').addEventListener('click', async () => {
+    if (!htmlInspectorSource) return;
+    try {
+        await navigator.clipboard.writeText(htmlInspectorSource);
+        htmlModalNotice.className = 'alert alert-success rounded-0 mb-0 small';
+        htmlModalNotice.innerText = 'Full HTML copied to clipboard.';
+        htmlModalNotice.classList.remove('d-none');
+    } catch {
+        // Clipboard needs a secure context; plain HTTP on a LAN address has none.
+        htmlModalNotice.className = 'alert alert-warning rounded-0 mb-0 small';
+        htmlModalNotice.innerText = 'Clipboard is blocked by the browser here — use Download instead.';
+        htmlModalNotice.classList.remove('d-none');
+    }
+});
+
+document.getElementById('btnHtmlDownload').addEventListener('click', () => {
+    if (!htmlInspectorSource) return;
+    const blob = new Blob([htmlInspectorSource], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    let name = 'page';
+    try { name = new URL(htmlModalUrl.innerText).hostname || 'page'; } catch { /* keep default */ }
+    a.download = `${name}-${Date.now()}.html`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+});
+
 // --- Input helpers ---
 function postInput(type, params) {
     if (!currentInstanceId || !currentTabId) return Promise.resolve();
@@ -1114,8 +1294,201 @@ window.addEventListener('mouseup', (e) => {
     nudge(120);
 });
 
-// Suppress the browser context menu so right-clicks reach the remote page.
-tabScreenshot.addEventListener('contextmenu', (e) => e.preventDefault());
+// --- Right-click menu over the live page ---------------------------------
+// Chrome's own context menu is drawn by the browser, not the renderer, so it
+// never appears in Page.captureScreenshot: forwarding the right-click alone
+// would look like nothing happened. The dashboard draws its own menu instead
+// and backs the entries with CDP. Sites that implement their own in-page menu
+// still work, via "Send right-click to page".
+const pageContextMenu = document.getElementById('pageContextMenu');
+let contextPoint = null;
+let inspectedNode = null;
+let inspectModalInstance = null;
+
+function closeContextMenu() {
+    pageContextMenu.classList.add('d-none');
+    pageContextMenu.innerHTML = '';
+}
+
+function contextItem(label, icon, onClick, options = {}) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = `<i class="bi ${icon}"></i><span>${escapeHtml(label)}</span>`;
+    if (options.disabled) b.disabled = true;
+    else b.addEventListener('click', () => { closeContextMenu(); onClick(); });
+    return b;
+}
+
+function openContextMenu(clientX, clientY, canvas) {
+    contextPoint = canvas;
+    pageContextMenu.innerHTML = '';
+
+    pageContextMenu.append(contextItem('Inspect element', 'bi-bullseye', () => inspectAtPoint(canvas)));
+    pageContextMenu.append(contextItem('Copy element selector', 'bi-code-slash', () => copySelectorAtPoint(canvas)));
+    pageContextMenu.append(contextItem('Clear highlight', 'bi-eraser', clearHighlight));
+
+    const sep = document.createElement('div');
+    sep.className = 'ctx-sep';
+    pageContextMenu.append(sep);
+
+    pageContextMenu.append(contextItem('Back', 'bi-arrow-left', () => tabAction('/history/back', {}, 'Back failed')));
+    pageContextMenu.append(contextItem('Forward', 'bi-arrow-right', () => tabAction('/history/forward', {}, 'Forward failed')));
+    pageContextMenu.append(contextItem('Reload', 'bi-arrow-clockwise', () => tabAction('/reload', {
+        headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ignore_cache: false }),
+    }, 'Reload failed')));
+
+    const sep2 = document.createElement('div');
+    sep2.className = 'ctx-sep';
+    pageContextMenu.append(sep2);
+
+    pageContextMenu.append(contextItem('View loaded HTML', 'bi-filetype-html', () => openHtmlInspector(currentTabId)));
+    pageContextMenu.append(contextItem('Send right-click to page', 'bi-mouse2', () => {
+        // For sites that render their own context menu in the document; that
+        // one does show up in the screenshot.
+        sendMouse({ type: 'mousePressed', x: canvas.x, y: canvas.y, button: 'right', buttons: 2, clickCount: 1 });
+        sendMouse({ type: 'mouseReleased', x: canvas.x, y: canvas.y, button: 'right', buttons: 0, clickCount: 1 });
+        nudge(250);
+    }));
+
+    const hint = document.createElement('div');
+    hint.className = 'ctx-hint';
+    hint.textContent = `at ${canvas.x}, ${canvas.y}`;
+    pageContextMenu.append(hint);
+
+    // Position within the scroll container, flipping near the right/bottom edge
+    // so the menu never spills outside the view.
+    const wrap = screenWrapper.getBoundingClientRect();
+    pageContextMenu.classList.remove('d-none');
+    const mw = pageContextMenu.offsetWidth;
+    const mh = pageContextMenu.offsetHeight;
+    let left = clientX - wrap.left + screenWrapper.scrollLeft;
+    let top = clientY - wrap.top + screenWrapper.scrollTop;
+    if (left + mw > screenWrapper.scrollLeft + wrap.width) left = Math.max(0, left - mw);
+    if (top + mh > screenWrapper.scrollTop + wrap.height) top = Math.max(0, top - mh);
+    pageContextMenu.style.left = `${left}px`;
+    pageContextMenu.style.top = `${top}px`;
+}
+
+tabScreenshot.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const c = toCanvasCoords(e);
+    if (!c) return;
+    openContextMenu(e.clientX, e.clientY, c);
+});
+
+document.addEventListener('click', (e) => {
+    if (!pageContextMenu.classList.contains('d-none') && !pageContextMenu.contains(e.target)) closeContextMenu();
+});
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeContextMenu(); }, true);
+screenWrapper.addEventListener('scroll', closeContextMenu);
+
+// --- Element inspection ---------------------------------------------------
+async function requestInspect(point, highlight = true) {
+    return fetchJsonOrThrow(`/api/instances/${currentInstanceId}/tabs/${currentTabId}/inspect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ x: point.x, y: point.y, highlight }),
+    });
+}
+
+async function clearHighlight() {
+    if (!currentInstanceId || !currentTabId) return;
+    try {
+        await fetchJsonOrThrow(`/api/instances/${currentInstanceId}/tabs/${currentTabId}/highlight`, { method: 'DELETE' });
+        nudge(200);
+    } catch { /* best effort */ }
+}
+
+async function copySelectorAtPoint(point) {
+    try {
+        const res = await requestInspect(point, false);
+        await navigator.clipboard.writeText(res.node.selector);
+    } catch (e) {
+        alert(`Could not copy the selector: ${e.message}`);
+    }
+}
+
+function inspectRow(label, value, mono = false) {
+    return `
+        <div class="row g-2 py-1 border-bottom border-theme">
+            <div class="col-4 col-sm-3 text-theme-muted small">${escapeHtml(label)}</div>
+            <div class="col-8 col-sm-9 small ${mono ? 'font-monospace' : ''}" style="word-break:break-all">${value}</div>
+        </div>`;
+}
+
+function renderInspectedNode(node) {
+    inspectedNode = node;
+    document.getElementById('inspectSelector').innerText = node.selector || '';
+    document.getElementById('inspectTag').innerText = `<${node.tag}>`;
+    document.getElementById('inspectSize').innerText = `${node.rect.width} x ${node.rect.height} at ${node.rect.x}, ${node.rect.y}`;
+
+    const attrs = node.attributes.length
+        ? node.attributes.map(a => `<div><span class="text-info">${escapeHtml(a.name)}</span>="${escapeHtml(a.value)}"</div>`).join('')
+        : '<span class="text-theme-muted">none</span>';
+
+    const styles = Object.entries(node.styles)
+        .map(([k, v]) => `<div><span class="text-theme-muted">${escapeHtml(k)}</span>: ${escapeHtml(v)}</div>`).join('');
+
+    document.getElementById('inspectBody').innerHTML = [
+        inspectRow('Selector', `<code>${escapeHtml(node.selector)}</code>`, true),
+        node.id ? inspectRow('Id', `<code>${escapeHtml(node.id)}</code>`, true) : '',
+        node.classes.length ? inspectRow('Classes', node.classes.map(c => `<code>${escapeHtml(c)}</code>`).join(' '), true) : '',
+        node.link ? inspectRow('Link', `<a href="${escapeAttr(node.link)}" target="_blank" rel="noopener">${escapeHtml(node.link)}</a>`) : '',
+        node.image ? inspectRow('Image', `<a href="${escapeAttr(node.image)}" target="_blank" rel="noopener">${escapeHtml(node.image)}</a>`) : '',
+        inspectRow('Children', String(node.child_count)),
+        node.text ? inspectRow('Text', escapeHtml(node.text.slice(0, 500))) : '',
+        inspectRow('Attributes', `<div class="font-monospace x-small">${attrs}</div>`),
+        inspectRow('Computed style', `<div class="font-monospace x-small">${styles}</div>`),
+        `<div class="mt-3">
+            <div class="text-theme-muted small mb-1">outerHTML</div>
+            <pre class="terminal-box mb-0" style="max-height:220px;white-space:pre-wrap;word-break:break-all;font-size:0.72rem">${escapeHtml(node.outer_html)}</pre>
+        </div>`,
+    ].join('');
+}
+
+function inspectNotice(kind, message) {
+    const n = document.getElementById('inspectNotice');
+    n.className = `alert alert-${kind} rounded-0 mb-0 small`;
+    n.innerText = message;
+    n.classList.remove('d-none');
+    setTimeout(() => n.classList.add('d-none'), 2600);
+}
+
+async function inspectAtPoint(point) {
+    if (!currentInstanceId || !currentTabId) return;
+    if (!inspectModalInstance) inspectModalInstance = new bootstrap.Modal(document.getElementById('inspectModal'));
+    document.getElementById('inspectBody').innerHTML = '<div class="text-theme-muted small">Inspecting…</div>';
+    document.getElementById('inspectNotice').classList.add('d-none');
+    inspectModalInstance.show();
+
+    try {
+        const res = await requestInspect(point, true);
+        renderInspectedNode(res.node);
+        nudge(250); // pull a frame so the highlight shows in the live view
+    } catch (e) {
+        document.getElementById('inspectBody').innerHTML =
+            `<div class="text-danger small">${escapeHtml(e.message)}</div>`;
+    }
+}
+
+document.getElementById('btnInspectCopySelector').addEventListener('click', async () => {
+    if (!inspectedNode) return;
+    try {
+        await navigator.clipboard.writeText(inspectedNode.selector);
+        inspectNotice('success', 'Selector copied.');
+    } catch { inspectNotice('warning', 'Clipboard blocked by the browser here.'); }
+});
+document.getElementById('btnInspectCopyHtml').addEventListener('click', async () => {
+    if (!inspectedNode) return;
+    try {
+        await navigator.clipboard.writeText(inspectedNode.outer_html);
+        inspectNotice('success', 'outerHTML copied.');
+    } catch { inspectNotice('warning', 'Clipboard blocked by the browser here.'); }
+});
+document.getElementById('btnInspectClear').addEventListener('click', async () => {
+    await clearHighlight();
+    inspectNotice('success', 'Highlight cleared.');
+});
 
 // Scroll / wheel
 tabScreenshot.addEventListener('wheel', (e) => {
@@ -1246,6 +1619,141 @@ const configForm = document.getElementById('configForm');
 async function loadConfig() { const config = await fetchAPI('/api/config'); configList.innerHTML = Object.entries(config).map(([key, value]) => `<tr><td>${key}</td><td>${value}</td><td><button class="btn btn-sm btn-outline-danger" onclick="deleteConfig('${key}')"><i class="bi bi-trash"></i></button></td></tr>`).join(''); }
 configForm.addEventListener('submit', async (e) => { e.preventDefault(); await fetchAPI('/api/config', 'POST', { key: document.getElementById('configKey').value, value: document.getElementById('configValue').value }); bootstrap.Modal.getInstance(document.getElementById('addConfigModal')).hide(); configForm.reset(); loadConfig(); });
 async function deleteConfig(key) { if(confirm('Delete?')) { await fetchAPI(`/api/config/${key}`, 'DELETE'); loadConfig(); } }
+
+// --- REST API settings ---------------------------------------------------
+// The toggle and key live in the config table server-side, so everything here
+// applies at runtime: no .env edit, no restart.
+const restEnabledSwitch = document.getElementById('restEnabledSwitch');
+const restApiKeyInput = document.getElementById('restApiKey');
+const restStatusBadge = document.getElementById('restStatusBadge');
+const restAlert = document.getElementById('restAlert');
+const restHint = document.getElementById('restHint');
+const restExample = document.getElementById('restExample');
+const btnRestSave = document.getElementById('btnRestSave');
+const btnRestReveal = document.getElementById('btnRestReveal');
+const btnRestCopy = document.getElementById('btnRestCopy');
+const btnRestGenerate = document.getElementById('btnRestGenerate');
+
+function showRestAlert(kind, message) {
+    if (!restAlert) return;
+    restAlert.className = `alert alert-${kind}`;
+    restAlert.innerText = message;
+    restAlert.classList.remove('d-none');
+}
+
+function renderRestSettings(settings) {
+    if (!settings || !restEnabledSwitch) return;
+
+    restEnabledSwitch.checked = Boolean(settings.requested);
+    restApiKeyInput.value = settings.api_key || '';
+    restApiKeyInput.placeholder = settings.has_key ? '' : 'No key set';
+
+    const baseUrl = `${window.location.origin}${settings.base_path}`;
+    document.getElementById('restBaseUrl').innerText = baseUrl;
+
+    restStatusBadge.className = `badge ${settings.enabled ? 'bg-success' : 'bg-secondary'}`;
+    restStatusBadge.innerText = settings.enabled ? 'Enabled' : 'Disabled';
+
+    // The switch can be on while the API is off — that only happens with no key.
+    restHint.innerText = settings.requested && !settings.enabled
+        ? 'Switched on, but inactive until a key is set.'
+        : '';
+
+    // /rest/docs only answers while the API is on; fall back to the dashboard
+    // copy at /api/docs so the contract is always one click away.
+    const docsLink = document.getElementById('linkRestDocs');
+    if (docsLink) {
+        docsLink.href = settings.enabled ? `${settings.base_path}/docs` : '/api/docs';
+        docsLink.title = settings.enabled
+            ? 'Opens the token-protected contract at /rest/docs'
+            : 'REST API is off — showing the dashboard copy at /api/docs';
+    }
+
+    restExample.classList.toggle('d-none', !settings.enabled);
+    if (settings.enabled) {
+        restExample.innerText = `curl -H "X-API-Key: ${settings.api_key}" ${baseUrl}/instances`;
+    }
+}
+
+async function loadRestSettings() {
+    if (!restEnabledSwitch) return;
+    restAlert.classList.add('d-none');
+    try {
+        renderRestSettings(await fetchJsonOrThrow('/api/settings/rest'));
+    } catch (e) {
+        showRestAlert('danger', `Could not load REST settings: ${e.message}`);
+    }
+}
+
+async function saveRestSettings(payload, successMessage) {
+    btnRestSave.disabled = true;
+    restAlert.classList.add('d-none');
+    try {
+        const result = await fetchJsonOrThrow('/api/settings/rest', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+        });
+        renderRestSettings(result);
+        showRestAlert('success', successMessage);
+    } catch (e) {
+        // Re-sync so the switch reflects what the server actually stored rather
+        // than the rejected attempt (e.g. enabling without a key).
+        await loadRestSettings();
+        showRestAlert('danger', e.message);
+    } finally {
+        btnRestSave.disabled = false;
+    }
+}
+
+if (btnRestSave) {
+    btnRestSave.addEventListener('click', () => saveRestSettings(
+        { enabled: restEnabledSwitch.checked, api_key: restApiKeyInput.value.trim() },
+        'Saved. The change is live — no restart needed.'
+    ));
+}
+
+if (btnRestGenerate) {
+    btnRestGenerate.addEventListener('click', async () => {
+        const rotating = Boolean(restApiKeyInput.value);
+        if (rotating && !await confirmAction({
+            title: 'Generate a new key?',
+            messageHtml: 'The current key stops working immediately. Any script or service using it has to be updated.',
+            confirmLabel: 'Generate new key',
+        })) return;
+
+        await saveRestSettings(
+            { enabled: restEnabledSwitch.checked, generate_key: true },
+            rotating ? 'New key generated. Update your clients — the old key no longer works.' : 'Key generated.'
+        );
+        restApiKeyInput.type = 'text';
+        btnRestReveal.innerHTML = '<i class="bi bi-eye-slash"></i>';
+    });
+}
+
+if (btnRestReveal) {
+    btnRestReveal.addEventListener('click', () => {
+        const hidden = restApiKeyInput.type === 'password';
+        restApiKeyInput.type = hidden ? 'text' : 'password';
+        btnRestReveal.innerHTML = `<i class="bi bi-eye${hidden ? '-slash' : ''}"></i>`;
+    });
+}
+
+if (btnRestCopy) {
+    btnRestCopy.addEventListener('click', async () => {
+        if (!restApiKeyInput.value) return;
+        try {
+            await navigator.clipboard.writeText(restApiKeyInput.value);
+            showRestAlert('success', 'API key copied to clipboard.');
+        } catch {
+            // Clipboard access needs a secure context; over plain HTTP on a LAN
+            // address it is unavailable, so fall back to selecting the text.
+            restApiKeyInput.type = 'text';
+            restApiKeyInput.select();
+            showRestAlert('warning', 'Clipboard blocked by the browser — the key is selected, copy it manually.');
+        }
+    });
+}
 
 // --- Utils ---
 async function fetchAPI(url, method = 'GET', body = null) { const opts = { method }; if (body) { opts.headers = { 'Content-Type': 'application/json' }; opts.body = JSON.stringify(body); } const res = await fetch(url, opts); if (res.status === 401) { window.location.reload(); return null; } return res.headers.get('content-type')?.includes('application/json') ? await res.json() : await res.text(); }

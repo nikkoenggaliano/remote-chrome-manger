@@ -253,6 +253,53 @@
 
                 <!-- VIEW: CONFIGURATION -->
                 <div id="view-config" class="view-section d-none">
+                    <div class="card card-theme mb-4">
+                        <div class="card-header d-flex justify-content-between align-items-center py-3">
+                            <h5 class="mb-0 fw-bold"><i class="bi bi-hdd-network me-2"></i>REST API</h5>
+                            <span id="restStatusBadge" class="badge bg-secondary">…</span>
+                        </div>
+                        <div class="card-body">
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" role="switch" id="restEnabledSwitch">
+                                <label class="form-check-label fw-bold" for="restEnabledSwitch">Enable the REST API</label>
+                                <div class="form-text text-theme-muted">
+                                    Serves the same endpoints as the dashboard under <code id="restBaseUrl">/rest</code>,
+                                    authenticated with an API key instead of the dashboard login. Takes effect immediately — no restart.
+                                </div>
+                            </div>
+
+                            <label class="form-label text-theme-muted small fw-bold">API KEY</label>
+                            <div class="input-group mb-2">
+                                <input type="password" class="form-control form-control-theme font-monospace" id="restApiKey" placeholder="No key set" autocomplete="off">
+                                <button class="btn btn-theme-secondary" type="button" id="btnRestReveal" title="Show / hide"><i class="bi bi-eye"></i></button>
+                                <button class="btn btn-theme-secondary" type="button" id="btnRestCopy" title="Copy"><i class="bi bi-clipboard"></i></button>
+                                <button class="btn btn-theme-secondary" type="button" id="btnRestGenerate" title="Generate a new random key"><i class="bi bi-arrow-repeat"></i> Generate</button>
+                            </div>
+                            <div class="form-text text-theme-muted mb-3">
+                                Send it as <code>X-API-Key</code> or <code>Authorization: Bearer &lt;key&gt;</code>.
+                                Rotating the key takes effect on the next request, so existing clients must be updated.
+                            </div>
+
+                            <div class="d-flex flex-wrap gap-2 mb-3">
+                                <a class="btn btn-sm btn-outline-info" id="linkRestDocs" href="/rest/docs" target="_blank" rel="noopener">
+                                    <i class="bi bi-book"></i> Browse the API contract
+                                </a>
+                                <a class="btn btn-sm btn-theme-secondary" href="/api/openapi.json" target="_blank" rel="noopener">
+                                    <i class="bi bi-filetype-json"></i> openapi.json
+                                </a>
+                            </div>
+
+                            <div id="restAlert" class="alert d-none" role="alert"></div>
+
+                            <div class="d-flex align-items-center gap-2">
+                                <button class="btn btn-primary px-4" id="btnRestSave">Save</button>
+                                <span class="text-theme-muted small" id="restHint"></span>
+                            </div>
+
+                            <div id="restExample" class="mt-3 p-3 border rounded border-theme bg-theme-surface small font-monospace d-none" style="white-space: pre-wrap; word-break: break-all;"></div>
+                        </div>
+                    </div>
+
                     <div class="card card-theme">
                         <div class="card-header d-flex justify-content-between align-items-center py-3">
                             <h5 class="mb-0 fw-bold">System Configuration</h5>
@@ -463,12 +510,20 @@
                             <button type="button" class="btn btn-success active" id="btnLiveToggle" title="Toggle live streaming">
                                 <i class="bi bi-broadcast"></i> <span id="liveToggleLabel">Live</span>
                             </button>
-                            <select id="liveFps" class="form-select form-select-sm form-select-theme" style="max-width: 90px;" title="Refresh rate">
-                                <option value="2000">0.5 fps</option>
-                                <option value="1000">1 fps</option>
-                                <option value="500" selected>2 fps</option>
-                                <option value="250">4 fps</option>
-                                <option value="100">10 fps</option>
+                            <!-- Values are the idle delay in ms between frames, so smaller is
+                                 faster. Floor is 10 fps; anything slower felt like a slideshow. -->
+                            <select id="liveFps" class="form-select form-select-sm form-select-theme" style="max-width: 82px;" title="Target frame rate">
+                                <option value="10" selected>10 fps</option>
+                                <option value="15">15 fps</option>
+                                <option value="20">20 fps</option>
+                                <option value="30">30 fps</option>
+                                <option value="0">Max</option>
+                            </select>
+                            <select id="liveScale" class="form-select form-select-sm form-select-theme" style="max-width: 96px;" title="Capture resolution. Auto asks for exactly the size the panel displays.">
+                                <option value="auto" selected>Auto</option>
+                                <option value="1">100%</option>
+                                <option value="0.75">75%</option>
+                                <option value="0.5">50%</option>
                             </select>
                          </div>
                          <button type="button" class="btn btn-sm btn-outline-secondary" onclick="refreshScreenshot()" title="Refresh once"><i class="bi bi-arrow-clockwise"></i></button>
@@ -494,14 +549,26 @@
     <div id="tabContent" class="d-none h-100 flex-column">
         <!-- Address Bar -->
         <div class="p-2 border-bottom border-theme bg-theme-surface d-flex gap-2 align-items-center">
+            <div class="btn-group btn-group-sm">
+                <button class="btn btn-outline-secondary" id="btnTabBack" title="Back"><i class="bi bi-arrow-left"></i></button>
+                <button class="btn btn-outline-secondary" id="btnTabForward" title="Forward"><i class="bi bi-arrow-right"></i></button>
+                <button class="btn btn-outline-secondary" id="btnTabReload" title="Reload (hold Shift to bypass cache)"><i class="bi bi-arrow-clockwise"></i></button>
+            </div>
             <input type="text" id="activeTabUrl" class="form-control form-control-sm form-control-theme font-monospace shadow-none">
             <button class="btn btn-sm btn-primary" id="btnGo">Go</button>
+            <button class="btn btn-sm btn-outline-info text-nowrap" id="btnInspectHtml" title="Inspect the HTML the browser has actually loaded">
+                <i class="bi bi-code-slash"></i> HTML
+            </button>
             <div class="vr mx-1 bg-secondary opacity-25"></div>
             <button class="btn btn-sm btn-danger" id="btnCloseTab"><i class="bi bi-x-lg"></i></button>
         </div>
                                 
                                 <!-- Screen -->
                                 <div id="screenWrapper" tabindex="0" class="flex-grow-1 bg-black d-flex align-items-start justify-content-center overflow-auto position-relative" style="background-color: #000; outline: none;">
+                                    <!-- Chrome's own context menu is browser chrome, so it can never appear
+                                         in a screenshot of the page. This is the dashboard's own menu,
+                                         backed by CDP. -->
+                                    <div id="pageContextMenu" class="page-context-menu d-none"></div>
                                     <img id="tabScreenshot" class="img-fluid" src="" style="width: 100%; height: auto; cursor: crosshair; display: block;" draggable="false">
                                     <div id="screenshotLoading" class="spinner-border text-primary position-absolute top-50 start-50" role="status" style="display: none; z-index: 100;"></div>
                                     <div id="focusHint" class="control-focus-hint position-absolute top-0 start-0 m-2 px-2 py-1 rounded small">
@@ -543,6 +610,61 @@
                 <div class="modal-footer modal-footer-theme">
                     <button type="button" class="btn btn-theme-secondary" data-bs-dismiss="modal">Close</button>
                     <button type="button" class="btn btn-primary" onclick="refreshInstanceLogs()">Refresh</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Inspected element -->
+    <div class="modal fade modal-lg" id="inspectModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-scrollable">
+            <div class="modal-content modal-content-theme">
+                <div class="modal-header modal-header-theme">
+                    <div class="overflow-hidden me-3">
+                        <h5 class="modal-title fw-bold fs-6"><i class="bi bi-bullseye me-2"></i>Inspected element</h5>
+                        <div class="x-small text-theme-muted font-monospace text-truncate" id="inspectSelector"></div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div class="px-3 py-2 border-bottom border-theme bg-theme-surface d-flex flex-wrap gap-2 align-items-center">
+                        <span class="badge bg-primary" id="inspectTag">—</span>
+                        <span class="badge bg-secondary" id="inspectSize">—</span>
+                        <div class="btn-group btn-group-sm ms-auto">
+                            <button class="btn btn-theme-secondary" id="btnInspectCopySelector"><i class="bi bi-clipboard"></i> Selector</button>
+                            <button class="btn btn-theme-secondary" id="btnInspectCopyHtml"><i class="bi bi-clipboard"></i> HTML</button>
+                            <button class="btn btn-theme-secondary" id="btnInspectClear"><i class="bi bi-eraser"></i> Clear highlight</button>
+                        </div>
+                    </div>
+                    <div id="inspectNotice" class="alert alert-success rounded-0 mb-0 d-none small"></div>
+                    <div class="p-3" id="inspectBody"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loaded HTML inspector -->
+    <div class="modal fade modal-xl" id="htmlModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-scrollable">
+            <div class="modal-content modal-content-theme">
+                <div class="modal-header modal-header-theme">
+                    <div class="overflow-hidden me-3">
+                        <h5 class="modal-title fw-bold fs-6"><i class="bi bi-code-slash me-2"></i>Loaded HTML</h5>
+                        <div class="x-small text-theme-muted text-truncate font-monospace" id="htmlModalUrl"></div>
+                    </div>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-0">
+                    <div class="px-3 py-2 border-bottom border-theme bg-theme-surface d-flex flex-wrap gap-2 align-items-center">
+                        <span class="badge bg-secondary" id="htmlModalMeta">—</span>
+                        <div class="btn-group btn-group-sm ms-auto">
+                            <button class="btn btn-theme-secondary" id="btnHtmlCopy"><i class="bi bi-clipboard"></i> Copy</button>
+                            <button class="btn btn-theme-secondary" id="btnHtmlDownload"><i class="bi bi-download"></i> Download</button>
+                            <button class="btn btn-theme-secondary" id="btnHtmlRefresh"><i class="bi bi-arrow-clockwise"></i> Re-capture</button>
+                        </div>
+                    </div>
+                    <div id="htmlModalNotice" class="alert alert-warning rounded-0 mb-0 d-none small"></div>
+                    <pre id="htmlModalBody" class="terminal-box border-0 rounded-0 mb-0" style="min-height: 55vh; white-space: pre-wrap; word-break: break-all; font-size: 0.75rem;">Loading…</pre>
                 </div>
             </div>
         </div>

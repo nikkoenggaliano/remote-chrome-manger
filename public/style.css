@@ -304,3 +304,57 @@ body {
     overflow-y: auto;
     border: 1px solid var(--border-color);
 }
+
+/* Per-tab "inspect loaded HTML" affordance. It sits inside the tab button, so
+   it only reveals itself on hover/focus of the row to avoid competing with the
+   tab title for attention. */
+.tab-list-item .tab-inspect {
+    opacity: 0;
+    transition: opacity 0.12s ease-in-out;
+    flex-shrink: 0;
+}
+.tab-list-item:hover .tab-inspect,
+.tab-list-item:focus-within .tab-inspect,
+.tab-list-item.active .tab-inspect {
+    opacity: 0.8;
+}
+.tab-list-item .tab-inspect:hover {
+    opacity: 1;
+}
+
+/* Dashboard-drawn context menu for the live page view. Chrome's real menu is
+   browser chrome and never reaches the screenshot, so this stands in for it. */
+.page-context-menu {
+    position: absolute;
+    z-index: 1200;
+    min-width: 210px;
+    padding: 4px;
+    border-radius: 8px;
+    border: 1px solid var(--bs-border-color, #333);
+    background: var(--bs-body-bg, #1b2029);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    font-size: 0.82rem;
+    user-select: none;
+}
+.page-context-menu button {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 5px;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+.page-context-menu button:hover:not(:disabled) { background: rgba(127, 127, 127, 0.18); }
+.page-context-menu button:disabled { opacity: 0.4; cursor: default; }
+.page-context-menu .ctx-sep { height: 1px; margin: 4px 2px; background: rgba(127, 127, 127, 0.25); }
+.page-context-menu .ctx-hint {
+    padding: 4px 10px 6px;
+    font-size: 0.7rem;
+    opacity: 0.55;
+    white-space: nowrap;
+}
