@@ -24,7 +24,8 @@ services:
     # in .env, and pinning the in-container listen port to 3000.
     environment:
       CHROME_BIN: /headless-shell/headless-shell
-      CHROME_MANAGER_ENABLE_WEBGL: "1"
+      # Left unset on purpose: Chrome picks its own renderer, which is about
+      # twice as fast as forcing SwiftShader and still provides WebGL.
       PORT: "3000"
 
     # Host ${PORT} (from .env, default 3000) -> container 3000.

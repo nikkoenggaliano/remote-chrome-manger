@@ -26,6 +26,8 @@ Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium ins
 - Closing the last tab never stops an instance — a replacement blank tab is opened first
 - Server dashboard for CPU, memory, disk, uptime, and network interfaces
 - Basic Auth for the UI and legacy `/api/*` endpoints
+- **CDP reverse proxy**: attach Puppeteer or Playwright to any instance through the
+  API key instead of exposing its unauthenticated DevTools port
 - Optional API key protected REST API under `/rest/*`, toggled from the dashboard at runtime
   (no restart) — see [docs/REST-API.md](docs/REST-API.md)
 - `run.sh` auto-creates `.env` from `.env.example` on first launch and enables WebGL-friendly Chrome flags by default
@@ -165,7 +167,16 @@ Notes:
   - `chrome_headless`
 - `GUI` mode needs a real desktop display on Linux.
 - `Headless via Xvfb` requires `Xvfb` and does not silently fall back to another mode.
-- `run.sh` enables `CHROME_MANAGER_ENABLE_WEBGL=1` by default.
+- Each instance keeps two logs in its profile directory: `manager.log` (why it
+  launched, why it stopped, what the health checks saw) and `chrome.log` (the
+  browser's own output). They used to share one file, and Chrome truncated the
+  manager's lines away on every start.
+- Chrome's verbose logging (`--v=1`) is off by default; it wrote roughly 1.5 GB
+  per hour per instance. Set `CHROME_MANAGER_VERBOSE_CHROME_LOG=1` to get it back.
+- Graphics flags are left to Chrome by default. It picks a real GPU where one exists
+  and SwiftShader where it does not, so WebGL works either way; measured at roughly
+  twice the capture rate of the SwiftShader stack that used to be forced.
+  `CHROME_MANAGER_ENABLE_WEBGL=1` restores that forced stack, `=0` passes `--disable-gpu`.
 - `REST_API` / `REST_API_KEY` only seed the REST settings on first run; afterwards the API is toggled from Configuration -> REST API. A toggle that is on with no key is treated as off.
 
 ## Docker Deployment
@@ -247,9 +258,11 @@ What it covers:
 |---|---|
 | Instances | list / read / create / update / delete, `start`, `stop`, `logs` |
 | Tabs | list, open, close, `navigate`, `reload`, `history/back`, `history/forward`, `activate` |
-| Page content | `html` (loaded DOM, `format=json\|html\|text`), `evaluate`, `screenshot`, `pdf` |
+| Page content | `html` (loaded DOM, `format=json\|html\|text`), `evaluate`, `screenshot`, `pdf`, `inspect` |
+| Whole instance | `tabs/html` and `tabs/screenshot` capture every tab in one call |
 | Input | `input` — mouse, key, and text events |
 | Cookies | export (`GET /cookies`) and import (`POST /cookies/import`) |
+| CDP proxy | `instances/:id/cdp/*` plus WebSocket, for Puppeteer/Playwright |
 | Health | `healthz`, `server/stats`, `server/logs`, `config` |
 | Docs | `docs` (browsable page), `openapi.json` (the contract) |
 
@@ -258,6 +271,9 @@ Two things worth knowing before you script against it:
 - **`GET /instances/:id/tabs/:tabId/html` returns the DOM the browser currently
   holds** — after scripts have run — which is not what re-fetching the URL gives
   you. `ready_state` in the response tells you whether the load had finished.
+- **`/instances/:id/cdp/*` proxies the raw DevTools endpoint**, so Puppeteer and
+  Playwright can drive a managed browser through the API key. The browser's own
+  CDP port has no authentication at all, so this is the safe way to expose it.
 - **Closing the last tab never stops an instance.** The API opens a replacement
   blank tab first and returns it as `replacement`, because in `gui`/`xvfb` mode
   closing the final tab would terminate the browser.

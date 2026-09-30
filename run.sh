@@ -82,9 +82,9 @@ if [ -z "${PORT:-}" ]; then
   PORT=3000
 fi
 
-if [ -z "${CHROME_MANAGER_ENABLE_WEBGL:-}" ]; then
-  export CHROME_MANAGER_ENABLE_WEBGL=1
-fi
+# Deliberately not defaulted: an unset value lets Chrome pick its own renderer,
+# which measured about twice as fast as the SwiftShader stack this used to force
+# and still leaves WebGL working. Set it explicitly in .env to override.
 
 # Check Auth
 if [ -z "${CHROME_FLEET_USERNAME:-}" ] || [ -z "${CHROME_FLEET_PASSWORD:-}" ]; then
@@ -112,7 +112,7 @@ echo "Port: $PORT"
 echo "REST_API (seed only, live toggle is in the dashboard): $REST_API"
 echo "Node: $NODE_BIN"
 echo "POP_UP_REAL_BROWSER: ${POP_UP_REAL_BROWSER:-false}"
-echo "CHROME_MANAGER_ENABLE_WEBGL: $CHROME_MANAGER_ENABLE_WEBGL"
+echo "CHROME_MANAGER_ENABLE_WEBGL: ${CHROME_MANAGER_ENABLE_WEBGL:-unset (Chrome decides)}"
 
 if [ -x "$SCRIPT_DIR/prep.sh" ]; then
   echo "Running prep.sh..."

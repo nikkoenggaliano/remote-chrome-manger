@@ -80,6 +80,7 @@
                                     <thead>
                                         <tr>
                                             <th>Status</th>
+                                            <th>ID</th>
                                             <th>Name</th>
                                             <th>Type</th>
                                             <th>Activity</th>
@@ -608,6 +609,9 @@
                     <div id="instance-logs-content" class="terminal-box border-0 rounded-0" style="min-height: 400px; white-space: pre-wrap;">Loading...</div>
                 </div>
                 <div class="modal-footer modal-footer-theme">
+                    <button type="button" class="btn btn-outline-danger me-auto" onclick="clearInstanceLogs()">
+                        <i class="bi bi-trash"></i> Clear logs
+                    </button>
                     <button type="button" class="btn btn-theme-secondary" data-bs-dismiss="modal">Close</button>
                     <button type="button" class="btn btn-primary" onclick="refreshInstanceLogs()">Refresh</button>
                 </div>

@@ -145,7 +145,8 @@ curl -s -X POST -H "$AUTH" $BASE/instances/$ID/stop
 | `DELETE` | `/instances/:id` | Delete |
 | `POST` | `/instances/:id/start` | Launch the browser (alias: `/spawn`) |
 | `POST` | `/instances/:id/stop` | Terminate the browser |
-| `GET` | `/instances/:id/logs` | Tail of the instance's `chrome.log` |
+| `GET` | `/instances/:id/logs` | Tail of the instance's logs |
+| `DELETE` | `/instances/:id/logs` | Empty both log files |
 
 ### Create
 
@@ -225,6 +226,8 @@ attach Puppeteer or Playwright directly instead of going through this API.
 | `POST` | `/instances/:id/tabs/:tabId/history/back` | Back |
 | `POST` | `/instances/:id/tabs/:tabId/history/forward` | Forward |
 | `POST` | `/instances/:id/tabs/:tabId/activate` | Bring to front |
+| `GET` | `/instances/:id/tabs/html` | Dump the DOM of **every** tab |
+| `GET` | `/instances/:id/tabs/screenshot` | Screenshot **every** tab |
 | `GET` | `/instances/:id/tabs/:tabId/html` | **Dump the loaded DOM** |
 | `POST` | `/instances/:id/tabs/:tabId/evaluate` | Run JavaScript |
 | `GET` | `/instances/:id/tabs/:tabId/screenshot` | JPEG of the viewport |
@@ -318,6 +321,48 @@ curl -H "$AUTH" "$BASE/instances/$ID/tabs/$TAB/html?format=text"
 captured mid-load; wait and capture again. The doctype is reconstructed, so a
 `format=html` dump opens as a standalone file.
 
+### Every tab at once
+
+The collection forms save you listing tabs and fanning out by hand. A tab that
+cannot be read carries an `error` field instead of sinking the batch, so one
+crashed tab still leaves the rest usable.
+
+```bash
+curl -H "$AUTH" $BASE/instances/$ID/tabs/html
+curl -H "$AUTH" "$BASE/instances/$ID/tabs/html?metadata_only=1"
+curl -H "$AUTH" "$BASE/instances/$ID/tabs/screenshot?scale=0.5"
+```
+
+```json
+{
+  "instance_id": 1,
+  "count": 2,
+  "failed": 1,
+  "metadata_only": true,
+  "captured_at": "2026-09-29T09:58:12.004Z",
+  "tabs": [
+    { "tab_id": "A1B2", "url": "https://example.com/", "title": "Example Domain", "ready_state": "complete", "html_bytes": 560 },
+    { "tab_id": "C3D4", "url": "about:blank", "title": "", "error": "Tab C3D4 is no longer available on 127.0.0.1:9222" }
+  ]
+}
+```
+
+| Endpoint | Param | Effect |
+|---|---|---|
+| `/tabs/html` | `metadata_only=1` | Drop `html` and `text`, keep sizes and titles |
+| `/tabs/screenshot` | `scale=0.25..1` | Capture resolution |
+
+Screenshots come back base64 encoded in the JSON, one entry per tab, so a single
+response carries the whole set.
+
+Two things worth knowing before you point this at a browser with many tabs:
+
+- **Bodies add up.** Five tabs of real pages produced a 155 KB response; the same
+  call with `metadata_only=1` was 1.5 KB. Ask for the bodies only when you want them.
+- **Chrome serialises captures**, so the screenshot cost grows with the tab
+  count and `scale` matters more here than for a single tab. Measured over four
+  tabs: 184 ms and 71 KB at full size, **95 ms and 23 KB at `scale=0.5`**.
+
 ### Run JavaScript
 
 ```bash
@@ -349,6 +394,12 @@ curl -H "$AUTH" "$BASE/instances/$ID/tabs/$TAB/pdf?landscape=1" -o page.pdf
 
 Screenshot JPEG quality follows the `SCREENSHOT_QUALITY` env var (10 to 100,
 default 60). PDF accepts `landscape=1` and `background=0`.
+
+`screenshot` also takes `scale` (0.25 to 1) and reports what it applied in the
+`X-Capture-Scale` response header. That header matters if you feed coordinates
+back in: a frame captured at `scale=0.5` is half the page's width, so a point
+read straight off the image lands at half the intended position. Divide image
+coordinates by the header value before passing them to `input` or `inspect`.
 
 ### Synthetic input
 
@@ -384,7 +435,141 @@ one page target while it is running.
 
 ---
 
-## 8. Cookies
+## 8. CDP proxy: drive an instance with Puppeteer or Playwright
+
+| Method | Path | Purpose |
+|---|---|---|
+| any | `/instances/:id/cdp/<devtools path>` | Proxy the browser's DevTools HTTP endpoint |
+| WS | `/instances/:id/cdp/devtools/browser/<id>` | Browser-level CDP session |
+| WS | `/instances/:id/cdp/devtools/page/<targetId>` | Page-level CDP session |
+
+A managed browser's own CDP port has **no authentication of any kind**: anyone
+who can route to it owns that browser. Publishing it meant either exposing that,
+or hand-rolling a socat tunnel per instance. This proxy puts the API key in front
+of it and collapses the whole fleet onto one reachable port.
+
+Everything under `/cdp/` is forwarded verbatim, and every `webSocketDebuggerUrl`
+in the response is rewritten to come back through the proxy, so a client that
+follows them stays authenticated instead of dialling the unprotected port.
+
+### What goes after `/cdp/`
+
+It is a catch-all, not a single segment. Whatever you put there is the path the
+browser receives, so it is anything you would normally hit on the raw CDP port:
+
+| Through the proxy | Reaches the browser as | What it is |
+|---|---|---|
+| `/cdp/json/version` | `/json/version` | Build info and the browser-level WebSocket URL |
+| `/cdp/json` | `/json` | Every open target |
+| `/cdp/json/list` | `/json/list` | Same as `/json` |
+| `/cdp/json/new?<url>` | `/json/new?<url>` | Open a tab (`PUT`) |
+| `/cdp/json/close/<targetId>` | `/json/close/<targetId>` | Close a target |
+| `/cdp/json/activate/<targetId>` | `/json/activate/<targetId>` | Focus a target |
+| `/cdp/json/protocol` | `/json/protocol` | Full protocol definition |
+| `/cdp/devtools/browser/<id>` | `/devtools/browser/<id>` | Browser-level WebSocket session |
+| `/cdp/devtools/page/<targetId>` | `/devtools/page/<targetId>` | Page-level WebSocket session |
+
+In other words:
+
+```
+http://HOST:PORT/rest/instances/1/cdp/json/version
+                                      \_____________/
+                                            |  forwarded verbatim
+                                            v
+http://<instance host>:<instance port>/json/version
+```
+
+You rarely have to build the WebSocket paths yourself: `/cdp/json/version` and
+`/cdp/json` already hand back proxied `ws://` URLs, ready to pass to Puppeteer.
+
+```bash
+curl -H "$AUTH" $BASE/instances/1/cdp/json/version
+```
+
+```json
+{
+  "Browser": "Chrome/154.0.8037.58",
+  "Protocol-Version": "1.3",
+  "webSocketDebuggerUrl": "ws://HOST:PORT/rest/instances/1/cdp/devtools/browser/30a98fed-65b8-493d-9ce4-43c1c6cf96ae"
+}
+```
+
+### Authenticating the WebSocket
+
+Send `X-API-Key` as a header, or put `?key=<key>` on the URL when the client
+cannot set headers. **Prefer the header**: query strings end up in access logs
+and shell history.
+
+### Puppeteer
+
+```js
+const puppeteer = require('puppeteer-core');
+
+const base = 'http://HOST:PORT/rest/instances/1/cdp';
+const key = process.env.REST_KEY;
+
+// /json/version already hands back a proxied ws:// URL.
+const { webSocketDebuggerUrl } = await fetch(`${base}/json/version`, {
+  headers: { 'X-API-Key': key },
+}).then((r) => r.json());
+
+const browser = await puppeteer.connect({
+  browserWSEndpoint: webSocketDebuggerUrl,
+  headers: { 'X-API-Key': key },
+});
+
+const page = await browser.newPage();
+await page.goto('https://example.com');
+console.log(await page.title());
+await browser.disconnect();
+```
+
+If your client cannot attach headers, append the key instead:
+
+```js
+const browser = await puppeteer.connect({
+  browserWSEndpoint: `${webSocketDebuggerUrl}?key=${key}`,
+});
+```
+
+### Playwright
+
+```js
+const { chromium } = require('playwright');
+
+const browser = await chromium.connectOverCDP(`${base}`, {
+  headers: { 'X-API-Key': key },
+});
+```
+
+### Status codes
+
+| Code | Meaning |
+|---|---|
+| `401` | Missing or wrong API key |
+| `404` | Instance not found, or the REST API is switched off |
+| `409` | The instance exists but is not running |
+| `502` | The instance is running but its CDP endpoint did not answer |
+
+A refused WebSocket upgrade answers with the same status on the raw socket, so
+failures surface as an error rather than a socket that never replies.
+
+### Notes
+
+- Chrome rejects a `Host` header that is not an IP address or `localhost`, as a
+  DNS-rebinding defence. The proxy replaces it, so the instance's `host` can stay
+  `0.0.0.0` and you can reach the API under any hostname.
+- **A client that stops reading is dropped, not buffered forever.** Above 16 MB
+  queued, the proxy stops reading from the browser until the client catches up;
+  past 128 MB it closes the connection with a reason saying so. Without that, a
+  single stalled client could grow the server's memory without bound.
+- An upstream failure arrives as a WebSocket close with code `1011` and a reason
+  naming what the browser said, rather than a socket that never answers.
+- Payloads are not truncated: a 5 MB CDP response passes through intact.
+- The proxy follows the REST toggle. Switch the API off and it returns 404 with
+  everything else under `/rest`.
+
+## 9. Cookies
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -400,14 +585,27 @@ curl -H "$AUTH" "$BASE/instances/$ID/cookies?domain=example.com"
 { "instance_id": 2, "count": 12, "cookies": [ { "name": "sid", "value": "…", "domain": ".example.com", "path": "/" } ] }
 ```
 
-Import accepts Netscape `cookies.txt` and common JSON exports; send the file
-contents inline:
+Import accepts three shapes, so a script does not have to pretend to be a file
+picker. Pick whichever you already have:
 
 ```bash
+# 1. cookies you already hold, as an array  (simplest for an API client)
+curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"cookies":[{"name":"sid","value":"abc","domain":".example.com","path":"/"}]}' \
+  $BASE/instances/$ID/cookies/import
+
+# 2. one export pasted in as text  (Netscape cookies.txt or JSON)
+curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  --data-binary @<(jq -Rs '{name:"cookies.txt", content:.}' cookies.txt) \
+  $BASE/instances/$ID/cookies/import
+
+# 3. a list of files  (what the dashboard sends)
 curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{"files":[{"name":"cookies.json","content":"[{\"name\":\"sid\",\"value\":\"abc\",\"domain\":\".example.com\",\"path\":\"/\"}]"}]}' \
   $BASE/instances/$ID/cookies/import
 ```
+
+Netscape `cookies.txt` and common JSON exports are both understood.
 
 ```json
 { "success": true, "imported": 1, "failed": 0, "failures": [], "total_cookies": 1 }
@@ -418,7 +616,7 @@ instead of failing the whole request.
 
 ---
 
-## 9. Health, server and config
+## 10. Health, server and config
 
 | Method | Path | Purpose |
 |---|---|---|
@@ -452,7 +650,7 @@ toggle and the key stay consistent.
 
 ---
 
-## 10. Worked example: scrape a JS-rendered page
+## 11. Worked example: scrape a JS-rendered page
 
 ```bash
 #!/usr/bin/env bash

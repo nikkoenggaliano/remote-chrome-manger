@@ -330,7 +330,7 @@ function renderInstances(instances) {
             ? `No instances match "${escapeHtml(searchQuery)}".`
             : 'No instances yet. Click "New Instance" to add one.';
         instancesList.innerHTML = `<div class="col-12"><div class="text-center text-theme-muted py-5">${emptyMsg}</div></div>`;
-        instancesTableBody.innerHTML = `<tr><td colspan="8" class="text-center text-theme-muted py-4">${emptyMsg}</td></tr>`;
+        instancesTableBody.innerHTML = `<tr><td colspan="9" class="text-center text-theme-muted py-4">${emptyMsg}</td></tr>`;
         return;
     }
 
@@ -358,6 +358,8 @@ function renderInstances(instances) {
                     <div class="d-flex align-items-center mb-3">
                         <span class="status-indicator status-${inst.status}"></span>
                         <span class="text-uppercase small fw-bold">${inst.status}</span>
+                        <span class="ms-auto x-small text-theme-muted font-monospace user-select-all text-nowrap"
+                              title="Use this id in the REST API, e.g. /rest/instances/${inst.id}/tabs">ID of instance: ${inst.id}</span>
                     </div>
 
                     ${renderInstanceMeta(inst)}
@@ -397,6 +399,7 @@ function renderInstances(instances) {
     instancesTableBody.innerHTML = filtered.map(inst => `
         <tr>
             <td><span class="status-indicator status-${inst.status}"></span> ${inst.status}</td>
+            <td class="font-monospace user-select-all">${inst.id}</td>
             <td>
                 <div class="fw-bold cursor-pointer text-primary" onclick="openControl(${inst.id}, '${escapeAttr(inst.name)}')">${escapeHtml(inst.name)}</div>
                 ${inst.notes ? `<div class="x-small text-theme-muted">${escapeHtml(inst.notes)}</div>` : ''}
@@ -816,6 +819,31 @@ syncInstanceTypeOptions();
 async function openLogs(id) { currentLogInstanceId = id; logContent.innerText = 'Loading...'; logModal.show(); refreshInstanceLogs(); }
 async function refreshInstanceLogs() { if (!currentLogInstanceId) return; const res = await fetchAPI(`/api/instances/${currentLogInstanceId}/logs`); logContent.innerText = res.logs || 'No logs found.'; logContent.scrollTop = logContent.scrollHeight; }
 
+// Emptying the logs loses the record of why an instance did what it did, and
+// there is no undo, so it asks first.
+async function clearInstanceLogs() {
+    if (!currentLogInstanceId) return;
+    const inst = allInstances.find(item => item.id === currentLogInstanceId);
+    const confirmed = await confirmAction({
+        title: 'Clear logs?',
+        messageHtml: `Both log files for <b>${escapeHtml(inst ? inst.name : `#${currentLogInstanceId}`)}</b> are emptied:`
+            + ' the manager log that records why it launched and stopped, and Chrome\'s own log.'
+            + ' The instance keeps running and starts writing fresh lines straight away.',
+        confirmLabel: 'Clear logs',
+        icon: 'bi-trash text-danger',
+    });
+    if (!confirmed) return;
+
+    try {
+        const res = await fetchJsonOrThrow(`/api/instances/${currentLogInstanceId}/logs`, { method: 'DELETE' });
+        const freed = (res?.cleared || []).reduce((sum, c) => sum + (c.freed_bytes || 0), 0);
+        await refreshInstanceLogs();
+        logContent.innerText = `Cleared ${formatBytes(freed)} of logs.\n\n` + logContent.innerText;
+    } catch (e) {
+        alert(`Could not clear the logs: ${e.message}`);
+    }
+}
+
 // --- Control Logic ---
 let currentTabs = [];
 let streamToken = 0;     // increments to cancel an in-flight streaming loop
@@ -838,6 +866,7 @@ async function openControl(id, name) {
 }
 
 function resetControlView() {
+    lastCaptureScale = 1;
     stopStream();
     currentTabId = null;
     currentTabs = [];
@@ -977,6 +1006,23 @@ function setStreamStatus(state, latencyMs) {
     streamLatency.innerText = (state === 'live' && typeof latencyMs === 'number') ? `${latencyMs} ms` : '—';
 }
 
+// The scale the server actually applied to the frame on screen, reported back
+// in X-Capture-Scale. Everything that converts between the image and the page
+// needs it: at scale 0.45 the image is 864 px wide while the page is still
+// 1920, so a click read straight off the image lands less than half way across.
+let lastCaptureScale = 1;
+
+// Width of the page's viewport in CSS pixels, recovered from the frame we are
+// showing. Deriving it from naturalWidth alone is what made the old version
+// oscillate: naturalWidth is itself the *result* of the scale, so asking for a
+// smaller frame made the next computation ask for a bigger one, and the live
+// view flipped between two resolutions on every single frame.
+function viewportWidthFromFrame() {
+    const natural = tabScreenshot.naturalWidth;
+    if (!natural) return 0;
+    return natural / (lastCaptureScale || 1);
+}
+
 // Capture resolution to ask for. "Auto" requests exactly what the panel will
 // display: the image is scaled to fit anyway, so anything sharper is pixels
 // Chrome reads back and the browser immediately throws away.
@@ -984,11 +1030,11 @@ function currentCaptureScale() {
     const choice = liveScale ? liveScale.value : 'auto';
     if (choice !== 'auto') return Number(choice);
     const shown = tabScreenshot.clientWidth;
-    const natural = tabScreenshot.naturalWidth;
-    if (!shown || !natural) return 1;
+    const viewport = viewportWidthFromFrame();
+    if (!shown || !viewport) return 1;
     // Round up to a 0.05 step so small panel resizes do not churn the value and
     // defeat the server's frame sharing.
-    return Math.min(1, Math.max(0.25, Math.ceil((shown / natural) * 20) / 20));
+    return Math.min(1, Math.max(0.25, Math.ceil((shown / viewport) * 20) / 20));
 }
 
 async function grabAndSwap() {
@@ -1002,6 +1048,10 @@ async function grabAndSwap() {
         const res = await fetch(`/api/instances/${reqInstance}/tabs/${reqTab}/screenshot?scale=${currentCaptureScale()}&t=${Date.now()}`);
         if (res.status === 401) { window.location.reload(); return false; }
         if (!res.ok) throw new Error(`screenshot ${res.status}`);
+        // Recorded before the image is swapped in, so coordinate mapping and
+        // the next scale decision both describe the frame actually on screen.
+        const appliedScale = parseFloat(res.headers.get('X-Capture-Scale'));
+        if (Number.isFinite(appliedScale) && appliedScale > 0) lastCaptureScale = appliedScale;
         const blob = await res.blob();
         const url = URL.createObjectURL(blob);
         await new Promise((resolve, reject) => {
@@ -1251,11 +1301,17 @@ const sendMouse = (params) => postInput('mouse', params);
 const sendKey = (params) => postInput('key', params);
 const sendText = (text) => postInput('text', { text });
 
+// Screen position -> page coordinates in CSS pixels, which is what CDP input
+// and DOM.getNodeForLocation expect. Two conversions are involved: the panel
+// scales the image to fit, and the image may itself be a downscaled capture.
+// Dividing by lastCaptureScale undoes the second one; without it every click,
+// drag, scroll and inspect landed short by exactly that factor.
 function toCanvasCoords(e) {
     const rect = tabScreenshot.getBoundingClientRect();
     if (!tabScreenshot.naturalWidth || !rect.width) return null;
-    const scaleX = tabScreenshot.naturalWidth / rect.width;
-    const scaleY = tabScreenshot.naturalHeight / rect.height;
+    const capture = lastCaptureScale || 1;
+    const scaleX = tabScreenshot.naturalWidth / capture / rect.width;
+    const scaleY = tabScreenshot.naturalHeight / capture / rect.height;
     return {
         x: Math.round((e.clientX - rect.left) * scaleX),
         y: Math.round((e.clientY - rect.top) * scaleY),

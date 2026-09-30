@@ -22,6 +22,7 @@ const cdpClient = require('./lib/cdp-client');
 const { parseCookieFiles } = require('./lib/cookie-import');
 const { runChecks } = require('./lib/dep-check');
 const { buildOpenApiSpec, documentedRoutes } = require('./lib/openapi');
+const { createCdpHttpProxy, attachCdpWebSocketProxy } = require('./lib/cdp-proxy');
 
 // --- Server Log Capture ---
 const serverLogs = [];
@@ -114,7 +115,12 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  // The CDP proxy has to replay request bodies verbatim upstream, and the
+  // parsed object is not good enough for that.
+  verify: (req, res, buf) => { req.rawBody = buf; },
+}));
 
 const legacyApi = express.Router();
 const restApi = express.Router();
@@ -715,6 +721,16 @@ async function handleDeleteConfig(req, res) {
   res.json({ success: true, key: req.params.key });
 }
 
+// A CDP proxy target has to exist, be a browser we can actually reach, and be
+// running: forwarding to a dead port would surface as a confusing 502.
+function getRunningInstanceForProxy(idOrName) {
+  const instance = getInstanceByIdOrThrow(idOrName);
+  if (instance.status !== 'running') {
+    throw createHttpError(409, `Instance "${instance.name}" is ${instance.status}. Start it before using its CDP endpoint.`);
+  }
+  return instance;
+}
+
 function serializeRestSettings() {
   const { requested, enabled, api_key: apiKey } = getRestApiSettings();
   return {
@@ -891,29 +907,80 @@ async function handleStopInstance(req, res) {
   res.json({ success: true, instance: serializeInstance(refreshed) });
 }
 
+// Tail of a file, or a short note when there is nothing to read.
+function tailFile(filePath, bytes) {
+  if (!filePath || !fs.existsSync(filePath)) return null;
+  try {
+    const size = fs.statSync(filePath).size;
+    if (!size) return '';
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const length = Math.min(size, bytes);
+      const buf = Buffer.alloc(length);
+      fs.readSync(fd, buf, 0, length, size - length);
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (error) {
+    return `Could not read ${filePath}: ${error.message}`;
+  }
+}
+
 async function handleGetInstanceLogs(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
-  const logPath = chromeManager.getLogPath(instance.id);
+  const managerPath = chromeManager.getLogPath(instance.id);
+  const chromePath = chromeManager.getChromeLogPath(instance.id);
 
-  if (!logPath || !fs.existsSync(logPath)) {
-    return res.json({ id: instance.id, log_path: logPath, logs: 'No log file found.' });
+  // The manager's log is what actually explains a misbehaving instance, and it
+  // used to be destroyed by Chrome truncating the shared file. It now leads,
+  // with Chrome's own output kept underneath it.
+  const managerLog = tailFile(managerPath, 20000);
+  const chromeLog = tailFile(chromePath, 20000);
+
+  const sections = [];
+  sections.push(`===== manager (${managerPath || 'n/a'}) =====`);
+  sections.push(managerLog === null ? 'No manager log yet.' : (managerLog || '(empty)'));
+  sections.push('');
+  sections.push(`===== chrome (${chromePath || 'n/a'}) =====`);
+  sections.push(chromeLog === null ? 'No chrome log yet.' : (chromeLog || '(empty)'));
+
+  res.json({
+    id: instance.id,
+    // Kept for callers that already read `log_path`; it now points at the
+    // manager log, which is the one worth looking at.
+    log_path: managerPath,
+    manager_log_path: managerPath,
+    chrome_log_path: chromePath,
+    manager_logs: managerLog,
+    chrome_logs: chromeLog,
+    logs: sections.join('\n'),
+  });
+}
+
+async function handleClearInstanceLogs(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const targets = [
+    ['manager', chromeManager.getLogPath(instance.id)],
+    ['chrome', chromeManager.getChromeLogPath(instance.id)],
+  ];
+
+  const cleared = [];
+  for (const [label, filePath] of targets) {
+    if (!filePath || !fs.existsSync(filePath)) continue;
+    try {
+      // Truncated, not deleted: Chrome and the spawned process both hold this
+      // file open, and unlinking it would leave them writing into an inode
+      // nobody can read any more, silently losing every later line.
+      const before = fs.statSync(filePath).size;
+      fs.truncateSync(filePath, 0);
+      cleared.push({ log: label, path: filePath, freed_bytes: before });
+    } catch (error) {
+      throw createHttpError(500, `Could not clear ${label} log: ${error.message}`);
+    }
   }
 
-  const stats = fs.statSync(logPath);
-  const size = stats.size;
-  const start = Math.max(0, size - 10000);
-  const stream = fs.createReadStream(logPath, { start, encoding: 'utf8' });
-  let data = '';
-
-  stream.on('data', (chunk) => {
-    data += chunk;
-  });
-  stream.on('end', () => {
-    res.json({ id: instance.id, log_path: logPath, logs: data });
-  });
-  stream.on('error', (error) => {
-    res.status(500).json({ error: error.message });
-  });
+  res.json({ success: true, instance_id: instance.id, cleared });
 }
 
 async function handleGetTabs(req, res) {
@@ -987,6 +1054,37 @@ async function handleTabHtml(req, res) {
     captured_at: dump.captured_at,
     html: dump.html,
     text: dump.text,
+  });
+}
+
+// Collection versions of the per-tab endpoints: one round trip instead of
+// listing tabs and then fanning out by hand. A tab that fails carries an
+// `error` field rather than failing the batch.
+async function handleAllTabsHtml(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const metadataOnly = isTruthy(req.query?.metadata_only);
+  const tabs = await cdpClient.dumpAllPages(instance.host, instance.port, { metadataOnly });
+
+  res.json({
+    instance_id: instance.id,
+    count: tabs.length,
+    failed: tabs.filter((t) => t.error).length,
+    metadata_only: metadataOnly,
+    captured_at: new Date().toISOString(),
+    tabs,
+  });
+}
+
+async function handleAllTabsScreenshot(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const tabs = await cdpClient.captureAllPages(instance.host, instance.port, { scale: req.query?.scale });
+
+  res.json({
+    instance_id: instance.id,
+    count: tabs.length,
+    failed: tabs.filter((t) => t.error).length,
+    captured_at: new Date().toISOString(),
+    tabs,
   });
 }
 
@@ -1094,12 +1192,18 @@ async function handleScreenshot(req, res) {
   // The live view renders the frame scaled to fit its panel anyway, so asking
   // Chrome for exactly the resolution that will be shown costs it far less work
   // than capturing full size and throwing pixels away in the browser.
-  const data = await cdpClient.captureScreenshot(instance.host, instance.port, req.params.tabId, {
-    scale: req.query?.scale,
-  });
+  const scale = cdpClient.clampScale(req.query?.scale ?? 1);
+  const data = await cdpClient.captureScreenshot(instance.host, instance.port, req.params.tabId, { scale });
   if (!data) {
     throw createHttpError(500, 'Failed to capture screenshot');
   }
+
+  // A scaled frame is no longer 1:1 with the page, so a viewer that maps a
+  // click through the image would land somewhere else entirely. Report the
+  // scale that was actually applied so the caller can convert image pixels back
+  // to viewport pixels exactly.
+  res.set('X-Capture-Scale', String(scale));
+  res.set('Access-Control-Expose-Headers', 'X-Capture-Scale');
   res.type('image/jpeg').send(Buffer.from(data, 'base64'));
 }
 
@@ -1127,10 +1231,24 @@ async function handleInput(req, res) {
 
 async function handleImportCookies(req, res) {
   const instance = getInstanceByIdOrThrow(req.params.id);
-  const files = Array.isArray(req.body?.files) ? req.body.files : null;
+
+  // Three shapes, because the dashboard and an API client want different ones.
+  // The browser picks files and sends `files`; a script usually already holds
+  // the cookies, and making it stringify them into a fake file was needless
+  // ceremony. `content` covers pasting one export straight in.
+  const body = req.body || {};
+  let files = Array.isArray(body.files) ? body.files : null;
+
+  if (!files && Array.isArray(body.cookies)) {
+    if (!body.cookies.length) throw createHttpError(400, 'cookies is empty');
+    files = [{ name: 'cookies.json', content: JSON.stringify(body.cookies) }];
+  }
+  if (!files && typeof body.content === 'string' && body.content.trim()) {
+    files = [{ name: normalizeString(body.name) || 'cookies.txt', content: body.content }];
+  }
 
   if (!files || files.length === 0) {
-    throw createHttpError(400, 'Missing cookie files');
+    throw createHttpError(400, 'Send cookies as "cookies" (an array), "content" (a Netscape or JSON export), or "files" (a list of {name, content})');
   }
 
   if (instance.type === 'local' && instance.status !== 'running') {
@@ -1179,8 +1297,12 @@ function registerRoutes(router) {
   router.post('/instances/:id/spawn', withErrorBoundary(handleStartInstance));
   router.post('/instances/:id/stop', withErrorBoundary(handleStopInstance));
   router.get('/instances/:id/logs', withErrorBoundary(handleGetInstanceLogs));
+  router.delete('/instances/:id/logs', withErrorBoundary(handleClearInstanceLogs));
 
   router.get('/instances/:id/tabs', withErrorBoundary(handleGetTabs));
+  // Registered before the /:tabId routes so the literal paths win.
+  router.get('/instances/:id/tabs/html', withErrorBoundary(handleAllTabsHtml));
+  router.get('/instances/:id/tabs/screenshot', withErrorBoundary(handleAllTabsScreenshot));
   router.post('/instances/:id/tabs/new', withErrorBoundary(handleNewTab));
   router.post('/instances/:id/tabs/:tabId/activate', withErrorBoundary(handleActivateTab));
   router.post('/instances/:id/tabs/:tabId/navigate', withErrorBoundary(handleNavigateTab));
@@ -1227,8 +1349,13 @@ function auditApiDocumentation() {
     }
   }
 
-  const undocumented = [...registered].filter((r) => !documented.has(r));
-  const stale = [...documented].filter((r) => !registered.has(r) && !r.endsWith('/docs') && !r.endsWith('/openapi.json'));
+  // The CDP proxy is deliberately a catch-all (`/cdp/*splat`): it forwards
+  // whatever DevTools path it is given, so it is documented as one operation
+  // rather than enumerated route by route.
+  const isProxyRoute = (route) => route.includes('/cdp');
+  const undocumented = [...registered].filter((r) => !documented.has(r) && !isProxyRoute(r));
+  const stale = [...documented].filter((r) => !registered.has(r)
+    && !r.endsWith('/docs') && !r.endsWith('/openapi.json') && !isProxyRoute(r));
   if (undocumented.length) {
     console.log(`[API docs] Not in the OpenAPI spec: ${undocumented.join(', ')}`);
   }
@@ -1245,6 +1372,12 @@ restApi.get('/healtz', withErrorBoundary(handleHealthz));
 
 // Runs once every REST route is on the router.
 auditApiDocumentation();
+
+// Everything under /cdp is a transparent pass-through to the instance's own
+// DevTools endpoint, so it is mounted as a catch-all rather than enumerated.
+const cdpHttpProxy = createCdpHttpProxy({ resolveInstance: getRunningInstanceForProxy });
+restApi.all('/instances/:id/cdp/*splat', withErrorBoundary(cdpHttpProxy));
+restApi.all('/instances/:id/cdp', withErrorBoundary(cdpHttpProxy));
 
 // Always mounted; restEnabledGate decides per request whether it answers.
 // Mounting conditionally at boot is what made this an .env-and-restart setting.
@@ -1279,6 +1412,29 @@ io.on('connection', (socket) => {
   socket.emit('instances_updated', getSerializedInstances());
 });
 
+// A browser cannot attach headers to a WebSocket handshake, and neither can
+// some CDP clients, so the key is accepted from the query string as well. The
+// header is preferable: query strings end up in access logs and shell history.
+attachCdpWebSocketProxy(server, {
+  resolveInstance: getRunningInstanceForProxy,
+  onLog: (level, message) => console.log(`[CDP proxy:${level}] ${message}`),
+  authorize: (req, url) => {
+    if (!getRestApiSettings().enabled) {
+      return { ok: false, status: 404, error: 'REST API is disabled. Enable it in Configuration -> REST API.' };
+    }
+    const { api_key: apiKey } = getRestApiSettings();
+    const bearerMatch = req.headers.authorization?.match(/^Bearer\s+(.+)$/i);
+    const provided = req.headers['x-api-key']
+      || (bearerMatch ? bearerMatch[1] : '')
+      || url.searchParams.get('key')
+      || '';
+    if (!provided || !apiKey || !secretsMatch(provided, apiKey)) {
+      return { ok: false, status: 401, error: 'Invalid or missing REST API key' };
+    }
+    return { ok: true };
+  },
+});
+
 const PORT = process.env.PORT || 3000;
 const HOST = '0.0.0.0';
 
@@ -1286,7 +1442,12 @@ server.listen(PORT, HOST, () => {
   console.log(`Server running on http://${HOST}:${PORT}`);
   const rest = getRestApiSettings();
   console.log(rest.enabled
-    ? `REST API enabled on http://${HOST}:${PORT}/rest — docs at http://${HOST}:${PORT}/rest/docs`
+    ? `REST API enabled on http://${HOST}:${PORT}/rest (docs at http://${HOST}:${PORT}/rest/docs)`
     : 'REST API disabled (toggle it in Configuration -> REST API)');
   console.log(`API contract browsable at http://${HOST}:${PORT}/api/docs`);
+  if (rest.enabled) {
+    // proxyBase() percent-encodes the id, which is right for a real id and
+    // wrong for a placeholder in a log line.
+    console.log(`CDP proxy at http://${HOST}:${PORT}/rest/instances/<id>/cdp (Puppeteer/Playwright entry point)`);
+  }
 });
