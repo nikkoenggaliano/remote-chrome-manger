@@ -388,6 +388,17 @@
                                 <input type="text" class="form-control form-control-theme" name="profile_dir" placeholder="./profiles/name">
                             </div>
                             <div class="mb-3">
+                                <label class="form-label text-theme-muted small fw-bold">EXTRA CHROME SWITCHES</label>
+                                <textarea class="form-control form-control-theme font-monospace" name="chrome_flags" rows="3" spellcheck="false"
+                                          placeholder="--proxy-server=&quot;http://127.0.0.1:8080&quot;&#10;--proxy-bypass-list=&quot;10.0.0.0/8,&lt;local&gt;&quot;"></textarea>
+                                <div class="form-text text-theme-muted">
+                                    One per line or separated by spaces. Quotes are stripped the way a shell would,
+                                    and lines starting with <code>#</code> are ignored. Applied the next time the
+                                    instance starts. Switches the server manages itself (debugging port, profile
+                                    directory, headless mode) are rejected.
+                                </div>
+                            </div>
+                            <div class="mb-3">
                                 <label class="form-label text-theme-muted small fw-bold">NOTES</label>
                                 <textarea class="form-control form-control-theme" name="notes" rows="2" placeholder="Instance notes..."></textarea>
                             </div>
@@ -425,6 +436,17 @@
                             </select>
                         </div>
                         <div class="mb-3">
+                                <label class="form-label text-theme-muted small fw-bold">EXTRA CHROME SWITCHES</label>
+                                <textarea class="form-control form-control-theme font-monospace" id="editChromeFlags" rows="3" spellcheck="false"
+                                          placeholder="--proxy-server=&quot;http://127.0.0.1:8080&quot;&#10;--proxy-bypass-list=&quot;10.0.0.0/8,&lt;local&gt;&quot;"></textarea>
+                                <div class="form-text text-theme-muted">
+                                    One per line or separated by spaces. Quotes are stripped the way a shell would,
+                                    and lines starting with <code>#</code> are ignored. Applied the next time the
+                                    instance starts. Switches the server manages itself (debugging port, profile
+                                    directory, headless mode) are rejected.
+                                </div>
+                            </div>
+                            <div class="mb-3">
                             <label class="form-label text-theme-muted small fw-bold">NOTES</label>
                             <textarea class="form-control form-control-theme" id="editInstanceNotes" rows="3" placeholder="Instance notes..."></textarea>
                         </div>

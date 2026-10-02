@@ -20,6 +20,7 @@ const db = require('./lib/db');
 const chromeManager = require('./lib/chrome-manager');
 const cdpClient = require('./lib/cdp-client');
 const { parseCookieFiles } = require('./lib/cookie-import');
+const { parseChromeFlags, readStoredFlags, serializeFlags } = require('./lib/chrome-flags');
 const { runChecks } = require('./lib/dep-check');
 const { buildOpenApiSpec, documentedRoutes } = require('./lib/openapi');
 const { createCdpHttpProxy, attachCdpWebSocketProxy } = require('./lib/cdp-proxy');
@@ -418,6 +419,9 @@ function serializeInstance(instance, interfaces = getNetworkInterfaces()) {
   const launchState = chromeManager.getInstanceLaunchState(instance);
   return {
     ...instance,
+    // The column stores JSON; callers get a plain array either way, including
+    // rows written before this column existed.
+    chrome_flags: readStoredFlags(instance.chrome_flags),
     tab_count: instanceTabCounts.has(instance.id) ? instanceTabCounts.get(instance.id) : null,
     memory_bytes: instanceMemoryBytes.has(instance.id) ? instanceMemoryBytes.get(instance.id) : null,
     use_xvfb: launchState?.launch_mode === 'xvfb',
@@ -560,6 +564,17 @@ function validateInstancePayload(payload, { partial = false } = {}) {
   if (!partial || Object.prototype.hasOwnProperty.call(payload, 'notes')) {
     const notes = typeof payload.notes === 'string' ? payload.notes.trim() : '';
     result.notes = notes || null;
+  }
+
+  if (!partial || Object.prototype.hasOwnProperty.call(payload, 'chrome_flags')) {
+    try {
+      // Rejected here rather than at launch: a switch that would break the
+      // instance should fail when you save it, while you are looking at it,
+      // not later when the browser mysteriously will not come up.
+      result.chrome_flags = parseChromeFlags(payload.chrome_flags);
+    } catch (error) {
+      throw createHttpError(400, error.message);
+    }
   }
 
   return result;
@@ -805,8 +820,8 @@ async function handleCreateInstance(req, res) {
   ensureInstanceUniqueness(payload);
 
   const info = db.prepare(`
-    INSERT INTO instances (name, type, host, port, forward_port, launch_mode, use_xvfb, use_socat, profile_dir, notes)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO instances (name, type, host, port, forward_port, launch_mode, use_xvfb, use_socat, profile_dir, notes, chrome_flags)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     payload.name,
     payload.type,
@@ -817,7 +832,8 @@ async function handleCreateInstance(req, res) {
     payload.use_xvfb ? 1 : 0,
     payload.use_socat ? 1 : 0,
     payload.profile_dir,
-    payload.notes
+    payload.notes,
+    serializeFlags(payload.chrome_flags)
   );
 
   const instance = getInstanceByIdOrThrow(info.lastInsertRowid);
@@ -870,6 +886,9 @@ async function handleUpdateInstance(req, res) {
     fields.push(`${key} = ?`);
     if (key === 'use_xvfb' || key === 'use_socat') {
       values.push(value ? 1 : 0);
+    } else if (key === 'chrome_flags') {
+      // Validation already normalised this to an array; the column holds JSON.
+      values.push(serializeFlags(value));
     } else {
       values.push(value);
     }

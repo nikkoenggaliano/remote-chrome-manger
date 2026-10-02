@@ -11,6 +11,8 @@ Chrome Fleet Control is a dashboard for managing multiple Chrome or Chromium ins
 - Keep separate browser profiles per instance
 - Port forwarding through `socat`
 - Per-instance launch mode selector with `GUI`, `Headless via Xvfb`, and `Native Chrome Headless`
+- **Per-instance Chrome switches** (`--proxy-server`, `--proxy-bypass-list`, `--lang`, anything else),
+  set from the dashboard or the API; quotes are handled, and switches the server manages are refused
 - Smooth, low-latency **live tab control**: continuous flicker-free streaming from 10 fps
   up to Max, full mouse (click, drag, scroll, right-click) and **keyboard** input (typing,
   special keys, and Ctrl/Cmd shortcuts)

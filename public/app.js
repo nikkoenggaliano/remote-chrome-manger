@@ -38,6 +38,7 @@ const editInstanceName = document.getElementById('editInstanceName');
 const editLaunchModeGroup = document.getElementById('editLaunchModeGroup');
 const editLaunchMode = document.getElementById('editLaunchMode');
 const editInstanceNotes = document.getElementById('editInstanceNotes');
+const editChromeFlags = document.getElementById('editChromeFlags');
 const editInstanceModal = new bootstrap.Modal(document.getElementById('editInstanceModal'));
 const importCookiesModalEl = document.getElementById('importCookiesModal');
 const importCookiesModal = new bootstrap.Modal(importCookiesModalEl);
@@ -370,6 +371,7 @@ function renderInstances(instances) {
                             ${renderLaunchFlags(inst)}
                         </div>
                         <span class="small text-theme-muted">${escapeHtml(inst.launch_backend_label || inst.launch_mode_label || 'Unknown')}</span>
+                        ${(inst.chrome_flags || []).length ? `<span class="badge bg-secondary ms-1" title="${escapeAttr(inst.chrome_flags.join('\n'))}"><i class="bi bi-flag"></i> ${inst.chrome_flags.length} switch${inst.chrome_flags.length === 1 ? '' : 'es'}</span>` : ''}
                     </div>
                     
                     <div class="mb-2">
@@ -677,6 +679,8 @@ function openEditInstance(id) {
     editLaunchModeGroup.style.display = inst.type === 'local' ? 'block' : 'none';
     editLaunchMode.disabled = inst.type !== 'local';
     editInstanceNotes.value = inst.notes || '';
+    // Stored as an array; shown one per line, which is how people read them.
+    editChromeFlags.value = (inst.chrome_flags || []).join('\n');
     editInstanceModal.show();
 }
 
@@ -701,7 +705,8 @@ editInstanceForm.addEventListener('submit', async (e) => {
 
     const payload = {
         name: editInstanceName.value.trim(),
-        notes: editInstanceNotes.value.trim()
+        notes: editInstanceNotes.value.trim(),
+        chrome_flags: editChromeFlags.value
     };
     const inst = allInstances.find(item => item.id === currentEditInstanceId);
     if (inst?.type === 'local') {

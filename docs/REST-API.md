@@ -172,9 +172,64 @@ curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 | `forward_port` + `use_socat` | no | Publish the CDP port through socat |
 | `profile_dir` | no | Absolute path; defaults to `<profiles_dir>/<name>` |
 | `notes` | no | Free text |
+| `chrome_flags` | no | Extra switches for this browser, applied on its next start |
 
 > **Launch mode matters.** `gui` and `xvfb` drive a real browser window; native
 > headless does not. See *Tab lifecycle* below.
+
+### Extra Chrome switches
+
+`chrome_flags` takes an array of strings, or one blob of text with the switches
+separated by newlines or spaces. Both of these are equivalent:
+
+```bash
+curl -X POST -H "$AUTH" -H 'Content-Type: application/json' -d '{
+  "name": "via-proxy", "type": "local", "host": "0.0.0.0", "port": 9222,
+  "launch_mode": "gui",
+  "chrome_flags": [
+    "--proxy-server=http://127.0.0.1:8080",
+    "--proxy-bypass-list=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,<local>"
+  ]
+}' $BASE/instances
+
+curl -X PATCH -H "$AUTH" -H 'Content-Type: application/json' -d '{
+  "chrome_flags": "--proxy-server=\"http://127.0.0.1:8080\"\n--proxy-bypass-list=\"10.0.0.0/8,<local>\""
+}' $BASE/instances/1
+```
+
+**Quotes are stripped the way a shell would.** That matters: instances are
+launched without a shell, so a value copied straight out of a terminal and
+passed through verbatim would reach Chrome with the quote marks still attached,
+and the switch would silently do nothing. Lines beginning with `#` are ignored,
+and a repeated switch keeps its first occurrence.
+
+Responses always return `chrome_flags` as an array, whichever form you sent.
+
+Switches the server manages itself are refused at save time, with the reason:
+
+| Refused | Why |
+|---|---|
+| `--remote-debugging-port` | assigned from the instance port |
+| `--remote-debugging-pipe` | moves CDP off the port the manager controls |
+| `--remote-debugging-address` | the manager binds this itself |
+| `--remote-allow-origins` | set so the dashboard can connect |
+| `--user-data-dir` | set the profile directory on the instance instead |
+| `--log-file` | the manager keeps `chrome.log` beside the profile |
+| `--headless` | choose the launch mode on the instance instead |
+
+Flags apply at launch, so an instance that is already running keeps the ones it
+started with until you stop and start it again.
+
+Two more worth knowing about, which are allowed but will not give you what you
+probably want:
+
+| Switch | What happens |
+|---|---|
+| `--dump-dom`, `--print-to-pdf`, `--no-startup-window` | Chrome comes up and the debug port opens, but it starts with no page, so the instance reads as running with zero tabs. Open a tab and it behaves normally. |
+| `--version`, `--help` | Chrome prints and exits, so the instance never reaches running. The manager reports the start failure. |
+
+And a Chrome quirk rather than a server one: `--window-size` is clamped to a
+minimum width of 500 px, so `--window-size=333,222` yields a 500 px viewport.
 
 ### Read
 
