@@ -48,6 +48,11 @@ const importCookiesFilesInput = document.getElementById('importCookiesFiles');
 const importCookiesSelectedFiles = document.getElementById('importCookiesSelectedFiles');
 const importCookiesResult = document.getElementById('importCookiesResult');
 const importCookiesSubmitBtn = document.getElementById('importCookiesSubmitBtn');
+const importStorageOptions = document.getElementById('importStorageOptions');
+const importSessionOrigin = document.getElementById('importSessionOrigin');
+const importSessionOpenUrl = document.getElementById('importSessionOpenUrl');
+const importSessionMirror = document.getElementById('importSessionMirror');
+const importSessionClear = document.getElementById('importSessionClear');
 
 // Control Modal
 const controlModalEl = document.getElementById('controlModal');
@@ -461,8 +466,8 @@ function getActions(inst, small = false) {
         <button class="btn ${btnClass}" onclick="openLogs(${inst.id})">
             <i class="bi bi-journal-text"></i> ${small ? '' : 'Logs'}
         </button>
-        <button class="btn ${btnClass}" onclick="openImportCookies(${inst.id})" title="Import Cookies" ${canImportCookies ? '' : 'disabled'}>
-            <i class="bi bi-box-arrow-in-down"></i> ${small ? '' : 'Import Cookies'}
+        <button class="btn ${btnClass}" onclick="openImportCookies(${inst.id})" title="Import Session" ${canImportCookies ? '' : 'disabled'}>
+            <i class="bi bi-box-arrow-in-down"></i> ${small ? '' : 'Import Session'}
         </button>
         <button class="btn ${btnClass}" onclick="openEditInstance(${inst.id})" ${inst.status !== 'stopped' ? 'disabled' : ''}>
             <i class="bi bi-pencil-square"></i> ${small ? '' : 'Edit'}
@@ -696,7 +701,24 @@ function openImportCookies(id) {
     importCookiesInstanceName.value = inst.name || '';
     setImportCookiesResult('', 'secondary', true);
     renderImportCookieFiles([]);
+    importStorageOptions.classList.add('d-none');
     importCookiesModal.show();
+
+    // Whatever the instance is already looking at is nearly always the site the
+    // session belongs to, so offer it rather than making someone type an origin.
+    prefillImportOrigin(id);
+}
+
+async function prefillImportOrigin(instanceId) {
+    try {
+        const tabs = await fetchJsonOrThrow(`/api/instances/${instanceId}/tabs`);
+        const page = (Array.isArray(tabs) ? tabs : []).find((tab) => tab.type === 'page' && /^https?:/i.test(tab.url || ''));
+        if (!page || currentImportInstanceId !== instanceId) return;
+        if (importSessionOrigin.value.trim()) return;
+        importSessionOrigin.value = new URL(page.url).origin;
+    } catch (error) {
+        // A blank field is a fine fallback; this is a convenience, not a step.
+    }
 }
 
 editInstanceForm.addEventListener('submit', async (e) => {
@@ -734,11 +756,26 @@ importCookiesModalEl.addEventListener('hidden.bs.modal', () => {
     importCookiesForm.reset();
     setImportCookiesResult('', 'secondary', true);
     renderImportCookieFiles([]);
+    importStorageOptions.classList.add('d-none');
     setImportSubmitState(false);
 });
 
-importCookiesFilesInput.addEventListener('change', () => {
-    renderImportCookieFiles(Array.from(importCookiesFilesInput.files || []));
+importCookiesFilesInput.addEventListener('change', async () => {
+    const files = Array.from(importCookiesFilesInput.files || []);
+    renderImportCookieFiles(files);
+    // Say what each file is before anything is sent. "Unsupported JSON cookie
+    // structure" after the fact is a poor way to learn that a localStorage dump
+    // is not a cookie file.
+    const sniffed = await Promise.all(files.map(async (file) => {
+        try {
+            return { file, kind: sniffSessionFile(await file.text()) };
+        } catch (error) {
+            return { file, kind: { kind: 'unknown', label: 'could not be read' } };
+        }
+    }));
+    renderImportCookieFiles(files, sniffed);
+    const needsOrigin = sniffed.some((item) => item.kind.kind === 'storage' || item.kind.kind === 'mixed');
+    importStorageOptions.classList.toggle('d-none', !needsOrigin);
 });
 
 importCookiesForm.addEventListener('submit', async (e) => {
@@ -751,7 +788,7 @@ importCookiesForm.addEventListener('submit', async (e) => {
 
     const files = Array.from(importCookiesFilesInput.files || []);
     if (!files.length) {
-        setImportCookiesResult('Select at least one cookie file.', 'danger');
+        setImportCookiesResult('Select at least one file.', 'danger');
         return;
     }
 
@@ -760,18 +797,34 @@ importCookiesForm.addEventListener('submit', async (e) => {
 
     try {
         const payloadFiles = await Promise.all(files.map(readFileAsText));
-        const result = await fetchJsonOrThrow(`/api/instances/${currentImportInstanceId}/cookies/import`, {
+        const payload = { files: payloadFiles };
+
+        if (!importStorageOptions.classList.contains('d-none')) {
+            const origin = importSessionOrigin.value.trim();
+            const openUrl = importSessionOpenUrl.value.trim();
+            const mirror = importSessionMirror.value.trim();
+            if (origin) payload.origin = origin;
+            if (openUrl) payload.open_url = openUrl;
+            if (mirror) payload.mirror_cookies = mirror;
+            if (importSessionClear.checked) payload.clear = true;
+        }
+
+        const result = await fetchJsonOrThrow(`/api/instances/${currentImportInstanceId}/session/import`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ files: payloadFiles })
+            body: JSON.stringify(payload)
         });
 
-        const summary = formatCookieImportSummary(result);
-        setImportCookiesResult(summary, result.failed || result.file_errors?.length ? 'warning' : 'success');
-        alert(summary);
-        importCookiesModal.hide();
+        const summary = formatSessionImportSummary(result);
+        const hadTrouble = result.cookies?.failed
+            || result.file_errors?.length
+            || (result.storage?.mirrored_cookies || []).some((m) => !m.applied);
+        setImportCookiesResult(summary, hadTrouble ? 'warning' : 'success');
+        if (!hadTrouble) {
+            setTimeout(() => importCookiesModal.hide(), 1200);
+        }
     } catch (error) {
-        setImportCookiesResult(error.message || 'Failed to import cookies.', 'danger');
+        setImportCookiesResult(error.message || 'Failed to import the session.', 'danger');
     } finally {
         setImportSubmitState(false);
     }
@@ -1832,18 +1885,116 @@ async function fetchJsonOrThrow(url, options = {}) {
     }
     return payload;
 }
-function renderImportCookieFiles(files) {
+function renderImportCookieFiles(files, sniffed = null) {
     if (!files.length) {
         importCookiesSelectedFiles.innerHTML = 'No files selected.';
         return;
     }
 
-    importCookiesSelectedFiles.innerHTML = files.map((file) => `
-        <div class="d-flex justify-content-between align-items-center gap-3">
+    const kindFor = (file) => (sniffed || []).find((item) => item.file === file)?.kind || null;
+    const tone = { cookies: 'bg-primary', storage: 'bg-info text-dark', mixed: 'bg-success', unknown: 'bg-danger' };
+
+    importCookiesSelectedFiles.innerHTML = files.map((file) => {
+        const kind = kindFor(file);
+        const badge = kind
+            ? `<span class="badge ${tone[kind.kind] || 'bg-secondary'}">${escapeHtml(kind.label)}</span>`
+            : '';
+        return `
+        <div class="d-flex justify-content-between align-items-center gap-3 py-1">
             <span class="text-break">${escapeHtml(file.name)}</span>
-            <span class="badge bg-secondary">${formatBytes(file.size)}</span>
-        </div>
-    `).join('');
+            <span class="d-flex gap-2 flex-shrink-0">
+                ${badge}
+                <span class="badge bg-secondary">${formatBytes(file.size)}</span>
+            </span>
+        </div>`;
+    }).join('');
+}
+
+// A deliberately rough read of the file, only so the dialog can label it before
+// anything is uploaded. The server does the real parsing and stays the
+// authority on what a file is.
+function sniffSessionFile(text) {
+    const trimmed = String(text || '').trim();
+    if (!trimmed) return { kind: 'unknown', label: 'empty' };
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+        const rows = trimmed.split(/\r?\n/).filter((line) => line.trim() && !line.trim().startsWith('#')).length;
+        return { kind: 'cookies', label: `${rows} cookie(s), Netscape` };
+    }
+
+    let json;
+    try {
+        json = JSON.parse(trimmed);
+    } catch (error) {
+        return { kind: 'unknown', label: 'not valid JSON' };
+    }
+
+    if (Array.isArray(json)) {
+        if (json.every((item) => Array.isArray(item) && item.length === 2)) {
+            return { kind: 'storage', label: `${json.length} storage key(s)` };
+        }
+        return { kind: 'cookies', label: `${json.length} cookie(s)` };
+    }
+    if (!json || typeof json !== 'object') return { kind: 'unknown', label: 'unrecognised' };
+
+    const cookieList = Array.isArray(json.cookies) ? json.cookies : (Array.isArray(json.data?.cookies) ? json.data.cookies : null);
+    const storageKeys = (json.localStorage ? Object.keys(json.localStorage).length : 0)
+        + (json.sessionStorage ? Object.keys(json.sessionStorage).length : 0);
+    if (cookieList && storageKeys) return { kind: 'mixed', label: `${cookieList.length} cookie(s) + ${storageKeys} storage key(s)` };
+    if (cookieList) return { kind: 'cookies', label: `${cookieList.length} cookie(s)` };
+    if (storageKeys) return { kind: 'storage', label: `${storageKeys} storage key(s)` };
+
+    if (typeof json.name === 'string' && (json.value !== undefined || json.domain !== undefined)) {
+        return { kind: 'cookies', label: '1 cookie' };
+    }
+
+    const keys = Object.keys(json);
+    if (keys.length && Object.values(json).every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v))) {
+        return { kind: 'storage', label: `${keys.length} storage key(s)` };
+    }
+    return { kind: 'unknown', label: 'unrecognised' };
+}
+
+function formatSessionImportSummary(result) {
+    const lines = [];
+    const files = Array.isArray(result.files) ? result.files : [];
+
+    for (const file of files) {
+        const bits = [];
+        if (file.cookie_count) bits.push(`${file.cookie_count} cookie(s)`);
+        if (file.local_keys) bits.push(`${file.local_keys} localStorage key(s)`);
+        if (file.session_keys) bits.push(`${file.session_keys} sessionStorage key(s)`);
+        lines.push(`${file.name}: ${bits.length ? bits.join(', ') : 'nothing usable'}`);
+    }
+
+    const cookies = result.cookies || {};
+    if (cookies.total) {
+        lines.push(`Cookies: ${cookies.imported || 0} of ${cookies.total} accepted by the browser.`);
+    }
+
+    const storage = result.storage;
+    if (storage) {
+        lines.push(`Storage: ${storage.wrote_local || 0} localStorage + ${storage.wrote_session || 0} sessionStorage key(s) written into ${storage.origin}.`);
+        for (const mirror of storage.mirrored_cookies || []) {
+            lines.push(mirror.applied
+                ? `Cookie ${mirror.cookie} set from ${mirror.key} (${mirror.length} chars).`
+                : `Cookie ${mirror.cookie} not set: ${mirror.reason || 'the page refused it'}.`);
+        }
+        if (storage.landed_url) lines.push(`Opened ${storage.landed_url}`);
+    }
+
+    if (Array.isArray(result.file_errors) && result.file_errors.length) {
+        lines.push(`Problems: ${result.file_errors.map((item) => `${item.name}: ${item.error}`).join(' | ')}`);
+    }
+
+    const failures = cookies.failures || [];
+    if (failures.length) {
+        const shown = failures.slice(0, 5)
+            .map((item) => `${item.name}${item.domain ? `@${item.domain}` : ''}: ${item.error}`)
+            .join(' | ');
+        lines.push(`Browser rejected ${failures.length} cookie(s): ${shown}${failures.length > 5 ? ` (+${failures.length - 5} more)` : ''}`);
+    }
+
+    return lines.join('\n');
 }
 function setImportCookiesResult(message, tone = 'secondary', hidden = false) {
     importCookiesResult.className = 'alert mb-0';

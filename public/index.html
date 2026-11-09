@@ -460,12 +460,12 @@
         </div>
     </div>
 
-    <!-- Import Cookies -->
+    <!-- Import Session -->
     <div class="modal fade" id="importCookiesModal" tabindex="-1">
-        <div class="modal-dialog">
+        <div class="modal-dialog modal-lg">
             <div class="modal-content modal-content-theme">
                 <div class="modal-header modal-header-theme">
-                    <h5 class="modal-title fw-bold">Import Cookies</h5>
+                    <h5 class="modal-title fw-bold">Import Session</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                 </div>
                 <div class="modal-body">
@@ -475,16 +475,54 @@
                             <input type="text" class="form-control form-control-theme" id="importCookiesInstanceName" disabled>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label text-theme-muted small fw-bold">COOKIE FILES</label>
+                            <label class="form-label text-theme-muted small fw-bold">SESSION FILES</label>
                             <input type="file" class="form-control form-control-theme" id="importCookiesFiles" accept=".txt,.json,text/plain,application/json" multiple required>
                             <div class="form-text text-theme-muted">
-                                Supports Netscape cookie files and common JSON cookie exports. You can select multiple files.
+                                Cookie exports (Netscape <code>cookies.txt</code> or JSON) and localStorage dumps are both accepted,
+                                and you can mix them in one upload. For a site whose session is a token rather than a cookie, run
+                                <code>copy(JSON.stringify(localStorage))</code> in the signed-in browser and save that.
                             </div>
                         </div>
                         <div id="importCookiesSelectedFiles" class="p-3 border rounded border-theme bg-theme-surface small text-theme-muted mb-3">
                             No files selected.
                         </div>
-                        <div id="importCookiesResult" class="alert d-none mb-0" role="alert"></div>
+
+                        <div id="importStorageOptions" class="d-none">
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label text-theme-muted small fw-bold">TARGET SITE</label>
+                                    <input type="text" class="form-control form-control-theme" id="importSessionOrigin" placeholder="https://app.example.com" autocomplete="off">
+                                    <div class="form-text text-theme-muted">
+                                        Browser storage is kept per site, so this says where it lands. Prefilled from the tab the instance is on.
+                                    </div>
+                                </div>
+                                <div class="col-md-6">
+                                    <label class="form-label text-theme-muted small fw-bold">OPEN AFTER IMPORT <span class="fw-normal">(optional)</span></label>
+                                    <input type="text" class="form-control form-control-theme" id="importSessionOpenUrl" placeholder="https://app.example.com/dashboard" autocomplete="off">
+                                    <div class="form-text text-theme-muted">Page to load once the session is in place.</div>
+                                </div>
+                            </div>
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-6">
+                                    <label class="form-label text-theme-muted small fw-bold">MIRROR INTO COOKIE <span class="fw-normal">(optional)</span></label>
+                                    <input type="text" class="form-control form-control-theme" id="importSessionMirror" placeholder="cookieName:storageKey" autocomplete="off">
+                                    <div class="form-text text-theme-muted">
+                                        Copies a storage value into a cookie of the same value. Needed when an app keeps one token
+                                        in both places, since a fresh token next to a stale cookie is rejected.
+                                    </div>
+                                </div>
+                                <div class="col-md-6 d-flex align-items-start">
+                                    <div class="form-check mt-4 pt-2">
+                                        <input class="form-check-input" type="checkbox" id="importSessionClear">
+                                        <label class="form-check-label small" for="importSessionClear">
+                                            Clear the site's existing storage first
+                                        </label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="importCookiesResult" class="alert d-none mb-0" role="alert" style="white-space: pre-wrap;"></div>
                         <div class="modal-footer modal-footer-theme px-0 pb-0 mt-3">
                             <button type="button" class="btn btn-theme-secondary" data-bs-dismiss="modal">Cancel</button>
                             <button type="submit" class="btn btn-primary px-4" id="importCookiesSubmitBtn">Import</button>

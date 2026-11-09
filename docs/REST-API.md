@@ -669,6 +669,89 @@ Netscape `cookies.txt` and common JSON exports are both understood.
 The instance must be running. Per-cookie failures are listed in `failures`
 instead of failing the whole request.
 
+### Sessions that do not live in cookies
+
+Plenty of applications keep nothing in cookies. A single-page app usually
+stores its token under a localStorage key and sends it as
+`Authorization: Bearer <token>`, so a perfectly restored cookie jar still
+lands on the login screen. `POST /instances/:id/session/import` takes either
+kind, or both at once, and works out per file which is which.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/instances/:id/session/import` | Import cookies, localStorage, or both |
+
+Recognised per file:
+
+| Shape | Treated as |
+|---|---|
+| `[{name, value, domain}, ...]` | cookies |
+| `{"cookies": [...]}` | cookies, the shape `GET /instances/:id/cookies` returns |
+| Netscape `cookies.txt`, `#HttpOnly_` rows included | cookies |
+| `{"token": "...", "groupId": "..."}` | localStorage, what `JSON.stringify(localStorage)` gives |
+| `[["token", "..."], ...]` | localStorage, from `Object.entries(localStorage)` |
+| `{"localStorage": {...}, "sessionStorage": {...}}` | an explicit bundle, `cookies` may sit beside it |
+
+To get the dump out of a signed-in browser, open the app's own tab, then in the
+DevTools console:
+
+```js
+copy(JSON.stringify(localStorage))
+```
+
+Save that and send it:
+
+```bash
+curl -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "$(jq -Rs --arg o https://app.example.com \
+        '{files:[{name:"local.json",content:.}],origin:$o,mirror_cookies:"session_token:token",open_url:"https://app.example.com/dashboard"}' \
+        local.json)" \
+  $BASE/instances/$ID/session/import
+```
+
+Browser storage is partitioned per site, so a file holding storage needs a
+target site. It is taken from `origin`, else from `open_url`, else from the
+cookies in the same upload when they all name one site. The tab is moved to
+that site before anything is written, and the write is refused if it does not
+arrive, because storage written from `about:blank` reports success and then
+disappears on the next navigation.
+
+| Field | Meaning |
+|---|---|
+| `files` | `[{name, content}]`, what the dashboard sends |
+| `cookies` | a cookie array, as an alternative to a file |
+| `local_storage` / `session_storage` | objects of key/value pairs |
+| `content` / `name` | one export pasted in as text |
+| `origin` | the site the storage belongs to, e.g. `https://app.example.com` |
+| `open_url` | page to open afterwards; supplies `origin` when that is absent |
+| `clear` | wipe the site's existing storage first, default false |
+| `mirror_cookies` | `"cookieName:storageKey"`, a list of those, or `[{cookie, key}]` |
+
+`mirror_cookies` copies a storage value into a cookie holding the same value,
+written raw the way the page itself would write it. Some apps keep one token in
+both places and reject a request that carries a fresh token next to a stale
+cookie, which is a hard failure to diagnose from the outside.
+
+```json
+{
+  "success": true,
+  "instance_id": 12,
+  "files": [ { "name": "local.json", "kind": "storage", "format": "storage-map", "cookie_count": 0, "local_keys": 17, "session_keys": 0 } ],
+  "file_errors": [],
+  "cookies": { "total": 0, "imported": 0, "failed": 0, "failures": [] },
+  "storage": {
+    "tab_id": "A1B2", "origin": "https://app.example.com",
+    "wrote_local": 17, "wrote_session": 0, "total_local": 17, "total_session": 0,
+    "mirrored_cookies": [ { "cookie": "session_token", "key": "token", "applied": true, "length": 439 } ],
+    "landed_url": "https://app.example.com/dashboard"
+  }
+}
+```
+
+A file that cannot be read is reported in `file_errors` and the rest of the
+upload still goes through. `POST /instances/:id/cookies/import` is unchanged
+and still accepts cookies only.
+
 ---
 
 ## 10. Health, server and config

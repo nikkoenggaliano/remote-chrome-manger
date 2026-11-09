@@ -20,6 +20,7 @@ const db = require('./lib/db');
 const chromeManager = require('./lib/chrome-manager');
 const cdpClient = require('./lib/cdp-client');
 const { parseCookieFiles } = require('./lib/cookie-import');
+const { parseSessionFiles, parseCookieMirrors } = require('./lib/session-import');
 const { parseChromeFlags, readStoredFlags, serializeFlags } = require('./lib/chrome-flags');
 const { runChecks } = require('./lib/dep-check');
 const { buildOpenApiSpec, documentedRoutes } = require('./lib/openapi');
@@ -1295,6 +1296,126 @@ async function handleImportCookies(req, res) {
   });
 }
 
+// A storage dump carries no origin of its own, so one has to be settled on.
+// Guessing wrong writes the session into the wrong partition and reports
+// success, which is the worst possible outcome, so every guess is derived from
+// something the caller actually supplied.
+function resolveSessionOrigin(body, cookies) {
+  const explicit = normalizeString(body?.origin);
+  if (explicit) {
+    try {
+      return new URL(explicit.includes('://') ? explicit : `https://${explicit}`).origin;
+    } catch (error) {
+      throw createHttpError(400, `origin "${explicit}" is not a valid URL`);
+    }
+  }
+
+  const openUrl = normalizeString(body?.open_url);
+  if (openUrl) {
+    try {
+      return new URL(openUrl).origin;
+    } catch (error) {
+      throw createHttpError(400, `open_url "${openUrl}" is not a valid URL`);
+    }
+  }
+
+  // Cookies in the same upload name the site often enough to be worth using,
+  // but only when they all agree; two sites in one upload is not a guess worth
+  // making on the caller's behalf.
+  const origins = new Set();
+  for (const cookie of cookies) {
+    if (!cookie.url) continue;
+    try {
+      origins.add(new URL(cookie.url).origin);
+    } catch (error) { /* a cookie without a usable url tells us nothing */ }
+  }
+  if (origins.size === 1) return [...origins][0];
+
+  throw createHttpError(400, origins.size > 1
+    ? 'The upload covers more than one site, so set "origin" to say which one the storage belongs to'
+    : 'This upload holds browser storage, which is stored per site. Set "origin" (for example https://example.com) so it lands on the right one.');
+}
+
+// The versatile sibling of /cookies/import: takes cookie files, localStorage
+// dumps, or a mix, and puts each where it belongs.
+async function handleImportSession(req, res) {
+  const instance = getInstanceByIdOrThrow(req.params.id);
+  const body = req.body || {};
+
+  let files = Array.isArray(body.files) ? body.files : null;
+  if (!files && Array.isArray(body.cookies) && body.cookies.length) {
+    files = [{ name: 'cookies.json', content: JSON.stringify(body.cookies) }];
+  }
+  if (!files && body.local_storage && typeof body.local_storage === 'object') {
+    files = [{ name: 'localStorage.json', content: JSON.stringify({ localStorage: body.local_storage, sessionStorage: body.session_storage || {} }) }];
+  }
+  if (!files && typeof body.content === 'string' && body.content.trim()) {
+    files = [{ name: normalizeString(body.name) || 'session.txt', content: body.content }];
+  }
+  if (!files || !files.length) {
+    throw createHttpError(400, 'Send the session as "files" (a list of {name, content}), "cookies" (an array), "local_storage" (an object), or "content" (one export as text)');
+  }
+
+  if (instance.type === 'local' && instance.status !== 'running') {
+    throw createHttpError(400, `Instance "${instance.name}" is ${instance.status}. Start it first so the CDP port ${instance.host}:${instance.port} is available.`);
+  }
+
+  let parsed;
+  try {
+    parsed = parseSessionFiles(files);
+  } catch (error) {
+    throw createHttpError(400, error.message);
+  }
+
+  let mirrors;
+  try {
+    mirrors = parseCookieMirrors(body.mirror_cookies ?? body.cookie_from);
+  } catch (error) {
+    throw createHttpError(400, error.message);
+  }
+
+  const localCount = Object.keys(parsed.local).length;
+  const sessionCount = Object.keys(parsed.session).length;
+  const needsOrigin = localCount > 0 || sessionCount > 0 || mirrors.length > 0;
+
+  const result = {
+    success: true,
+    instance_id: instance.id,
+    files: parsed.files,
+    file_errors: parsed.errors,
+    cookies: { total: parsed.cookies.length, imported: 0, failed: 0, failures: [] },
+    storage: null,
+  };
+
+  if (parsed.cookies.length) {
+    const outcome = await cdpClient.importCookies(instance.host, instance.port, parsed.cookies);
+    result.cookies.imported = outcome.imported;
+    result.cookies.failed = outcome.failed;
+    result.cookies.failures = outcome.failures;
+  }
+
+  if (needsOrigin) {
+    const origin = resolveSessionOrigin(body, parsed.cookies);
+    try {
+      result.storage = await cdpClient.importStorage(instance.host, instance.port, {
+        origin,
+        local: parsed.local,
+        session: parsed.session,
+        clear: body.clear === true || body.clear === 'true',
+        mirrorCookies: mirrors,
+        openUrl: normalizeString(body.open_url) || null,
+      });
+    } catch (error) {
+      if (error.code === 'ORIGIN_MISMATCH' || error.code === 'BAD_ORIGIN') {
+        throw createHttpError(400, error.message);
+      }
+      throw error;
+    }
+  }
+
+  res.json(result);
+}
+
 function registerRoutes(router) {
   router.get('/server/stats', withErrorBoundary(handleGetServerStats));
   router.get('/server/logs', withErrorBoundary(handleGetServerLogs));
@@ -1338,6 +1459,7 @@ function registerRoutes(router) {
   router.post('/instances/:id/tabs/:tabId/history/:direction', withErrorBoundary(handleTabHistory));
   router.get('/instances/:id/tabs/:tabId/pdf', withErrorBoundary(handleTabPdf));
   router.post('/instances/:id/cookies/import', withErrorBoundary(handleImportCookies));
+  router.post('/instances/:id/session/import', withErrorBoundary(handleImportSession));
   router.get('/instances/:id/cookies', withErrorBoundary(handleExportCookies));
 }
 
